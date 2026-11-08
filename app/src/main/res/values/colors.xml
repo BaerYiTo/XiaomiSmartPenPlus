@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg_window">#F2F3F5</color>
+    <color name="card">#FFFFFF</color>
+    <color name="text_primary">#191919</color>
+    <color name="text_secondary">#8C8C8C</color>
+    <color name="text_tertiary">#BFBFBF</color>
+    <color name="divider">#EFEFEF</color>
+    <color name="accent">#3482FF</color>
+    <color name="ripple">#14191919</color>
+    <color name="track_off">#D8D8D8</color>
+</resources>

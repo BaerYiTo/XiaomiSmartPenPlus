@@ -1,0 +1,15 @@
+XiaomiSmartPenPlus / 焦点笔 Plus
+Copyright 2026 XiaomiSmartPenPlus contributors
+
+This project is based on maintainer-supplied FocusPenPro sources, published with
+the maintainer's confirmed authorization under the Apache License, Version 2.0.
+The Miuix interface, per-application configuration, synchronization fixes,
+package identity and original pen-plus icon are modifications in this project.
+
+This is an independent community project. It is not affiliated with, endorsed
+by, or an official product of Xiaomi or its associated companies. Product and
+trademark names are used only to describe compatibility and belong to their
+respective owners. No extracted proprietary Xiaomi ROM components are included.
+
+Third-party components retain their own copyrights and licenses.
+See app/src/main/assets/third_party for their notices and license texts.

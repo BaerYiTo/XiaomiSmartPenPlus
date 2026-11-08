@@ -1,0 +1,88 @@
+Xiaomi Smart Pen Plus — 第三方开源组件与来源
+
+本文件说明本应用使用的第三方组件。各组件依其自身许可证授权；本项目的许可证不会替代第三方许可证或授予小米商标、系统软件和素材的权利。
+
+1. Miuix UI / Preference / Icons 0.9.4
+   包含其 Core、Shader、Squircle 模块。
+   Copyright 2025, compose-miuix-ui contributors.
+   SPDX-License-Identifier: Apache-2.0
+   来源：https://github.com/compose-miuix-ui/miuix/tree/v0.9.4
+   上游许可证：https://github.com/compose-miuix-ui/miuix/blob/v0.9.4/LICENSE
+   完整文本见 Apache-2.0.txt（及保留的 Miuix-LICENSE.txt）。
+
+2. MaterialKolor / material-color-utilities 5.0.1
+   Copyright (c) 2025 Jordon de Hoog.
+   SPDX-License-Identifier: MIT
+   来源：https://github.com/jordond/MaterialKolor/tree/5.0.1
+   上游许可证：https://github.com/jordond/MaterialKolor/blob/5.0.1/LICENSE
+   完整 MIT 许可与原版权声明见 MIT-MaterialKolor.txt。
+   其中从 Google Material Color Utilities 转移的实现另保留 Apache-2.0：
+   Copyright 2021 Google LLC.
+   来源：https://github.com/material-foundation/material-color-utilities
+   适用部分依其上游源码头部声明授权，完整 Apache 许可见 Apache-2.0.txt。
+
+3. AndroidX / Android Compose
+   The Android Open Source Project and contributors.
+   SPDX-License-Identifier: Apache-2.0
+   包括 Activity Compose、Compose、Lifecycle、SavedState 等运行依赖。
+   来源：https://android.googlesource.com/platform/frameworks/support/
+   完整 Apache 许可见 Apache-2.0.txt。
+
+4. Kotlin 2.4.20、kotlinx-coroutines 1.9.0、kotlinx-serialization 1.7.3
+   与 JetBrains Compose Multiplatform 1.12.0 / AndroidX Multiplatform
+   JetBrains and contributors.
+   SPDX-License-Identifier: Apache-2.0
+   来源：https://github.com/JetBrains/kotlin
+         https://github.com/Kotlin/kotlinx.coroutines
+         https://github.com/Kotlin/kotlinx.serialization
+         https://github.com/JetBrains/compose-multiplatform
+   完整 Apache 许可见 Apache-2.0.txt。
+
+5. Xposed API 82（仅编译接口）
+   rovo89 and Xposed API contributors.
+   SPDX-License-Identifier: Apache-2.0
+   Maven 坐标：de.robv.android.xposed:api:82
+   许可依据：该版本发布 POM 中的 Apache License 2.0 声明。
+   来源：https://api.xposed.info/
+         https://github.com/rovo89/XposedBridge
+   接口使用 compileOnly；运行实现由已安装的兼容框架提供，未随本应用打包。
+   完整 Apache 许可见 Apache-2.0.txt。
+
+6. Gradle Wrapper（源码中的构建工具）
+   Gradle and contributors.
+   SPDX-License-Identifier: Apache-2.0
+   来源：https://github.com/gradle/gradle
+   Wrapper JAR 自带 META-INF/LICENSE；其许可不决定本项目的许可。
+
+7. Poko annotations 0.23.1
+   Drew Hamilton and contributors.
+   SPDX-License-Identifier: Apache-2.0
+   来源：https://github.com/drewhamilton/Poko/tree/0.23.1
+   MaterialKolor 的注解依赖；完整 Apache 许可见 Apache-2.0.txt。
+
+8. JetBrains annotations 23.0.0
+   JetBrains s.r.o.
+   SPDX-License-Identifier: Apache-2.0
+   来源：https://github.com/JetBrains/java-annotations
+   完整 Apache 许可见 Apache-2.0.txt。
+
+9. JSpecify annotations 1.0.0
+   The JSpecify Authors.
+   SPDX-License-Identifier: Apache-2.0
+   来源：https://github.com/jspecify/jspecify
+   完整 Apache 许可见 Apache-2.0.txt。
+
+10. Guava ListenableFuture 1.0
+    Copyright (C) 2007 The Guava Authors.
+    SPDX-License-Identifier: Apache-2.0
+    来源：https://github.com/google/guava
+    完整 Apache 许可见 Apache-2.0.txt。
+
+运行依赖解析清单见 Resolved-runtime-dependencies.txt。
+
+第三方运行环境
+本应用需要用户独立安装、启用兼容的 LSPosed/Xposed 框架。框架的实现及许可由相应上游独立提供，框架本体未随 APK 重分发。
+LSPosed 来源：https://github.com/LSPosed/LSPosed
+
+商标与关联
+本应用为非官方项目，与 Xiaomi/小米、Miuix、JetBrains、Google 及 LSPosed 官方没有赞助、授权或隶属关系。相关名称仅用于说明功能、依赖和实际测试环境；商标归其各自权利人所有。

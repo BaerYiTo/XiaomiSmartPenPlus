@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Needed to list launchable apps for the "启动应用" action. -->
+    <queries>
+        <!-- Used once to import settings when migrating from the former package. -->
+        <provider android:authorities="com.focuspenlite.config" />
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
+    <!--
+      FocusPenLite: a deliberately small LSPosed module that only remaps the two hardware
+      buttons of the Xiaomi Smart Pen. It never disables the ROM's own pen-key handling:
+      unbound buttons are passed through untouched.
+    -->
+    <application
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:hasCode="true"
+        android:allowBackup="false"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.FocusPenLite">
+
+        <activity
+            android:name="xiaomismartpen.plus.ConfigActivity"
+            android:exported="true"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Read-only config plumbing: system_server cannot read this app's SharedPreferences. -->
+        <provider
+            android:name="xiaomismartpen.plus.ConfigProvider"
+            android:authorities="xiaomismartpen.plus.config"
+            android:exported="true" />
+
+        <!-- Legacy Xposed markers: LSPosed still loads legacy modules. -->
+        <meta-data
+            android:name="xposedmodule"
+            android:value="true" />
+        <meta-data
+            android:name="xposedminversion"
+            android:value="82" />
+        <meta-data
+            android:name="xposeddescription"
+            android:value="焦点笔 Plus：笔键重映射与按应用独立配置，非小米官方模块" />
+        <!-- Legacy scope list. "android" means the system_server process. -->
+        <meta-data
+            android:name="xposedscope"
+            android:value="android" />
+
+    </application>
+
+</manifest>
