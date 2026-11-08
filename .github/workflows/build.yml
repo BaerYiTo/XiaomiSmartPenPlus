@@ -19,10 +19,18 @@ jobs:
           distribution: temurin
           java-version: '21'
       # The Ubuntu runner already provides Android command-line tools.
-      - run: '"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37" "build-tools;37.0.0"'
-      - uses: gradle/actions/setup-gradle@v4
       - name: Backend regression
         run: python3 backend-tests/run_tests.py
+      - name: Install Android SDK
+        run: |
+          sdk_tool="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          (yes || true) | "$sdk_tool" --licenses > /dev/null
+          if ! "$sdk_tool" --channel=3 'platforms;android-37' 'build-tools;37.0.0' > sdk-install.log 2>&1; then
+            cat sdk-install.log
+            python3 -c 'from pathlib import Path; s=Path("sdk-install.log").read_text()[-4000:]; print("::error::"+s.replace("%","%25").replace("\r","%0D").replace("\n","%0A"))'
+            exit 1
+          fi
+      - uses: gradle/actions/setup-gradle@v4
       - name: Build and lint
         run: bash gradlew :app:assembleDebug :app:lintDebug --console=plain
       - uses: actions/upload-artifact@v4
