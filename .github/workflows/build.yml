@@ -25,7 +25,7 @@ jobs:
         run: |
           sdk_tool="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           (yes || true) | "$sdk_tool" --licenses > /dev/null
-          if ! "$sdk_tool" --channel=3 'platforms;android-37' 'build-tools;37.0.0' > sdk-install.log 2>&1; then
+          if ! "$sdk_tool" 'platforms;android-37.0' 'build-tools;37.0.0' > sdk-install.log 2>&1; then
             cat sdk-install.log
             python3 -c 'from pathlib import Path; s=Path("sdk-install.log").read_text()[-4000:]; print("::error::"+s.replace("%","%25").replace("\r","%0D").replace("\n","%0A"))'
             exit 1

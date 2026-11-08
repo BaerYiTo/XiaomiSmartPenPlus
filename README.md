@@ -38,7 +38,7 @@
 
 ## 构建
 
-需要 JDK 17 或更高、Android SDK Platform 37、Build Tools 37.0.0。构建使用 Gradle 9.6.0、AGP 9.2.1、Kotlin 2.4.20、Miuix 0.9.4。
+需要 JDK 17 或更高、Android SDK Platform 37.0（SDK Manager 包名 `platforms;android-37.0`）、Build Tools 37.0.0。构建使用 Gradle 9.6.0、AGP 9.2.1、Kotlin 2.4.20、Miuix 0.9.4。云端 SDK 工具使用 JDK 21。
 
 用 Android Studio 打开项目，或设置 `ANDROID_HOME`；也可在未提交的 `local.properties` 设置 `sdk.dir`。首次构建需要联网下载依赖。
 
