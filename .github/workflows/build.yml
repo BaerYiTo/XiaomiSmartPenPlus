@@ -42,7 +42,23 @@ jobs:
           echo "bbaeb2fef8710818cf0e261201dab964c572f92b942812df0c3620d62a529a01  $gradle_zip" | sha256sum --check
           GRADLE_VERIFIED_ZIP="$gradle_zip" python3 -c 'import os; from pathlib import Path; p=Path("gradle/wrapper/gradle-wrapper.properties"); s=p.read_text(); s="\n".join("distributionUrl="+Path(os.environ["GRADLE_VERIFIED_ZIP"]).as_uri() if line.startswith("distributionUrl=") else line for line in s.splitlines())+"\n"; p.write_text(s)'
       - name: Build and lint
+        env:
+          SMARTPEN_CI_MAVEN: ${{ runner.temp }}/verified-maven
         run: |
+          compiler_dir="$SMARTPEN_CI_MAVEN/org/jetbrains/kotlin/kotlin-compiler-embeddable/2.4.20"
+          mkdir -p "$compiler_dir"
+          compiler_jar="$compiler_dir/kotlin-compiler-embeddable-2.4.20.jar"
+          compiler_pom="$compiler_dir/kotlin-compiler-embeddable-2.4.20.pom"
+          curl --fail --location --retry 3 --max-time 180 \
+            --header 'Accept: application/octet-stream' \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            'https://api.github.com/repos/JetBrains/kotlin/releases/assets/587891620' \
+            --output "$compiler_jar"
+          curl --fail --location --retry 3 --max-time 60 \
+            'https://repo.maven.apache.org/maven2/org/jetbrains/kotlin/kotlin-compiler-embeddable/2.4.20/kotlin-compiler-embeddable-2.4.20.pom' \
+            --output "$compiler_pom"
+          echo "cf97161430683fb9af96dc6a7017ffae1fe8737b80d12eee11f2fe3e76f8ded8  $compiler_jar" | sha256sum --check
+          echo "269d98cc4c68670c11e4aeb404e1c7c6f31b782321908d7268ba25cd236d59b2  $compiler_pom" | sha256sum --check
           if ! bash gradlew :app:assembleDebug :app:lintDebug --console=plain > gradle-build.log 2>&1; then
             cat gradle-build.log
             python3 -c 'from pathlib import Path; s=Path("gradle-build.log").read_text()[-6000:]; print("::error::"+s.replace("%","%25").replace("\r","%0D").replace("\n","%0A"))'
