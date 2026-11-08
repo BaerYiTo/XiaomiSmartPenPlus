@@ -532,22 +532,22 @@ class ConfigActivity : ComponentActivity() {
     @Composable
     private fun About() {
         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            InfoCard("焦点笔 Plus", "笔键重映射 · 默认配置与应用专属配置", "版本 ${BuildConfig.VERSION_NAME}")
+            InfoCard("焦点笔 Plus", "首个构建版本 · 笔键重映射与按应用配置", "版本 ${BuildConfig.VERSION_NAME}")
             Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(18.dp)) {
                 Text("使用说明", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(8.dp))
                 SecondaryText("在 LSPosed 中启用模块，并按框架提示重启。模块加载后，已保存的设置会自动同步。")
                 Spacer(Modifier.height(8.dp))
-                SecondaryText("应用配置优先于默认配置。删除应用配置后，该应用重新使用默认配置。旧版应用名单会迁移为对应的应用配置。")
+                SecondaryText("应用配置优先于默认配置。删除应用配置后，该应用重新使用默认配置。")
                 Spacer(Modifier.height(8.dp))
                 SecondaryText("需要恢复系统原生行为时，可关闭对应笔键的接管；也可以在 LSPosed 中停用模块并重启。")
-                Spacer(Modifier.height(8.dp))
-                SecondaryText("从旧版迁移时，先打开本应用确认配置，再停用旧模块、启用 Plus 并重启，避免同时接管笔键。")
             }
             Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(18.dp)) {
                 Text("项目声明", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(8.dp))
                 SecondaryText("本项目由社区独立维护，与小米及其关联公司无隶属、授权或背书关系。小米及相关产品名称仅用于说明设备兼容性。")
+                Spacer(Modifier.height(8.dp))
+                SecondaryText("仅在小米 Pad 6 Pro、HyperOS 3 上测试通过。其他设备和系统版本尚未验证。")
                 Spacer(Modifier.height(8.dp))
                 SecondaryText("软件按现状提供。Root、LSPosed 与系统 Hook 的兼容性取决于设备和 ROM；使用前请备份，遇到异常可停用模块并重启。第三方组件版权和许可证保留在源码与 APK 的 third_party 目录中。")
             }

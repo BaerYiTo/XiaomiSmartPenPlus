@@ -1,10 +1,13 @@
 XiaomiSmartPenPlus / 焦点笔 Plus
 Copyright 2026 XiaomiSmartPenPlus contributors
 
-This project is based on maintainer-supplied FocusPenPro sources, published with
-the maintainer's confirmed authorization under the Apache License, Version 2.0.
-The Miuix interface, per-application configuration, synchronization fixes,
-package identity and original pen-plus icon are modifications in this project.
+This is the first build release of XiaomiSmartPenPlus, version 1.2.0.
+The project source is published under the Apache License, Version 2.0.
+It includes a Miuix interface, per-application pen-button configuration
+and an original pen-plus icon.
+
+Testing has passed only on Xiaomi Pad 6 Pro running HyperOS 3.
+Other devices and system versions have not been verified.
 
 This is an independent community project. It is not affiliated with, endorsed
 by, or an official product of Xiaomi or its associated companies. Product and
