@@ -3,7 +3,7 @@ No Android device, Gradle download, or system installation is required.
 Usage: python backend-tests/run_tests.py --java-home <JDK directory>
 """
 from pathlib import Path
-import argparse, subprocess, shutil
+import argparse, os, subprocess, shutil
 parser=argparse.ArgumentParser(); parser.add_argument('--java-home'); args=parser.parse_args()
 project=Path(__file__).resolve().parent.parent
 build=project/'build'/'backend-tests'; sources=build/'stubs'; classes=build/'classes'
@@ -55,8 +55,9 @@ public static void fireChange(){if(registeredObserver!=null)registeredObserver.d
 for name,content in stubs.items():
     p=sources/name; p.parent.mkdir(parents=True,exist_ok=True); p.write_text(content,encoding='utf-8')
 java_home=Path(args.java_home) if args.java_home else None
-javac=str(java_home/'bin'/'javac.exe') if java_home else shutil.which('javac')
-java=str(java_home/'bin'/'java.exe') if java_home else shutil.which('java')
+executable_suffix = '.exe' if os.name == 'nt' else ''
+javac=str(java_home/'bin'/('javac'+executable_suffix)) if java_home else shutil.which('javac')
+java=str(java_home/'bin'/('java'+executable_suffix)) if java_home else shutil.which('java')
 if not java or not javac: raise SystemExit('A JDK is required; pass --java-home if it is not on PATH.')
 prod=project/'app'/'src'/'main'/'java'/'xiaomismartpen'/'plus'
 # Compile only this run's doubles; stale generated package paths from earlier runs are ignored.
