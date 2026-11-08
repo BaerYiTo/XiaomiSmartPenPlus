@@ -31,6 +31,16 @@ jobs:
             exit 1
           fi
       - uses: gradle/actions/setup-gradle@v4
+      - name: Prepare verified Gradle distribution
+        run: |
+          gradle_zip="$RUNNER_TEMP/gradle-9.6.0-bin.zip"
+          curl --fail --location --retry 3 --max-time 180 \
+            --header 'Accept: application/octet-stream' \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            'https://api.github.com/repos/gradle/gradle-distributions/releases/assets/451669088' \
+            --output "$gradle_zip"
+          echo "bbaeb2fef8710818cf0e261201dab964c572f92b942812df0c3620d62a529a01  $gradle_zip" | sha256sum --check
+          GRADLE_VERIFIED_ZIP="$gradle_zip" python3 -c 'import os; from pathlib import Path; p=Path("gradle/wrapper/gradle-wrapper.properties"); s=p.read_text(); s="\n".join("distributionUrl="+Path(os.environ["GRADLE_VERIFIED_ZIP"]).as_uri() if line.startswith("distributionUrl=") else line for line in s.splitlines())+"\n"; p.write_text(s)'
       - name: Build and lint
         run: |
           if ! bash gradlew :app:assembleDebug :app:lintDebug --console=plain > gradle-build.log 2>&1; then
