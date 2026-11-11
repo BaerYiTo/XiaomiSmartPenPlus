@@ -68,6 +68,12 @@ final class ActionRunner {
                 case PenConfig.ACTION_SWIPE_DOWN:
                     swipe(context, false);
                     break;
+                case PenConfig.ACTION_SWIPE_LEFT:
+                    swipeHorizontally(context, true);
+                    break;
+                case PenConfig.ACTION_SWIPE_RIGHT:
+                    swipeHorizontally(context, false);
+                    break;
                 case PenConfig.ACTION_SCREENSHOT:
                     screenshot(context);
                     break;
@@ -114,27 +120,51 @@ final class ActionRunner {
      * yet the app still computes a realistic fling velocity from the event times.
      */
     private static void swipe(Context context, boolean upward) {
-        InputManager input = (InputManager) context.getSystemService(Context.INPUT_SERVICE);
-        if (input == null) return;
-
         DisplayMetrics metrics = Resources.getSystem().getDisplayMetrics();
         float x = metrics.widthPixels * 0.5f;
         float top = metrics.heightPixels * 0.28f;
         float bottom = metrics.heightPixels * 0.72f;
         float from = upward ? bottom : top;
         float to = upward ? top : bottom;
+        injectSwipe(context, x, from, x, to);
+    }
+
+    /**
+     * A horizontal swipe across the middle of the screen, for novel readers that page left/right:
+     * moving the finger toward the left goes to the next page, toward the right goes back one page.
+     * Same synthetic-touch trick as {@link #swipe(Context, boolean)}.
+     */
+    private static void swipeHorizontally(Context context, boolean leftward) {
+        DisplayMetrics metrics = Resources.getSystem().getDisplayMetrics();
+        float y = metrics.heightPixels * 0.5f;
+        float left = metrics.widthPixels * 0.25f;
+        float right = metrics.widthPixels * 0.75f;
+        float from = leftward ? right : left;
+        float to = leftward ? left : right;
+        injectSwipe(context, from, y, to, y);
+    }
+
+    /**
+     * Inject one straight drag from (x0, y0) to (x1, y1). Timestamps are laid out backwards from
+     * now, so the whole gesture is injected without blocking the input thread, yet the app still
+     * computes a realistic fling velocity from the event times.
+     */
+    private static void injectSwipe(Context context, float x0, float y0, float x1, float y1) {
+        InputManager input = (InputManager) context.getSystemService(Context.INPUT_SERVICE);
+        if (input == null) return;
 
         final long durationMs = 160L;
         final int steps = 8;
         long now = SystemClock.uptimeMillis();
         long downTime = now - durationMs;
 
-        send(input, motion(downTime, downTime, MotionEvent.ACTION_DOWN, x, from));
+        send(input, motion(downTime, downTime, MotionEvent.ACTION_DOWN, x0, y0));
         for (int step = 1; step <= steps; step++) {
             send(input, motion(downTime, downTime + durationMs * step / steps,
-                    MotionEvent.ACTION_MOVE, x, from + (to - from) * step / steps));
+                    MotionEvent.ACTION_MOVE, x0 + (x1 - x0) * step / steps,
+                    y0 + (y1 - y0) * step / steps));
         }
-        send(input, motion(downTime, now, MotionEvent.ACTION_UP, x, to));
+        send(input, motion(downTime, now, MotionEvent.ACTION_UP, x1, y1));
     }
 
     private static MotionEvent motion(long downTime, long eventTime, int action, float x, float y) {

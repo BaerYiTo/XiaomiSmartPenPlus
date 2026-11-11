@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.1
+
+- Add swipe-left and swipe-right synthetic touch actions, for novel readers that page horizontally.
+- Release build: versionName `1.2.1`, versionCode `6`.
+
 ## 1.2.0
 
 - Replace the interface with Compose Miuix, with dark mode and tablet layout.

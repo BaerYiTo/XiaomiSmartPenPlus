@@ -20,8 +20,8 @@ android {
         applicationId = "xiaomismartpen.plus"
         minSdk = 28
         targetSdk = 37
-        versionCode = 4
-        versionName = "1.2.0"
+        versionCode = 6
+        versionName = "1.2.1"
     }
 
     compileOptions {

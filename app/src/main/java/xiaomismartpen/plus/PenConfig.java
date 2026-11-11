@@ -41,6 +41,9 @@ final class PenConfig {
     /** Synthetic touch gesture. Feed apps (抖音 / 小红书 …) only navigate on touch, not on page keys. */
     static final String ACTION_SWIPE_UP = "swipe_up";
     static final String ACTION_SWIPE_DOWN = "swipe_down";
+    /** Horizontal variants, for novel readers that page left/right instead of scrolling. */
+    static final String ACTION_SWIPE_LEFT = "swipe_left";
+    static final String ACTION_SWIPE_RIGHT = "swipe_right";
     static final String ACTION_SCREENSHOT = "screenshot_partial";
     /** Hand the untouched pen key to the foreground app, for apps that map it themselves. */
     static final String ACTION_PASSTHROUGH = "passthrough";
@@ -62,6 +65,8 @@ final class PenConfig {
             ACTION_PAGE_DOWN,
             ACTION_SWIPE_UP,
             ACTION_SWIPE_DOWN,
+            ACTION_SWIPE_LEFT,
+            ACTION_SWIPE_RIGHT,
             ACTION_SCREENSHOT,
             ACTION_PASSTHROUGH,
     };
@@ -79,6 +84,8 @@ final class PenConfig {
             "下翻页",
             "上滑",
             "下滑",
+            "左滑",
+            "右滑",
             "区域截屏",
             "透传给应用",
     };
