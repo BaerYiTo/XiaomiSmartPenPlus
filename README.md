@@ -2,7 +2,7 @@
 
 <img src="docs/assets/app-icon.png" width="112" alt="焦点笔 Plus 图标">
 
-为小米触控笔提供笔键重映射和按应用独立配置的 Android / LSPosed 模块，使用 [Compose Miuix](https://github.com/compose-miuix-ui/miuix) 界面。
+为小米灵感触控笔二代提供笔键重映射和按应用独立配置的 Android / LSPosed 模块，使用 [Compose Miuix](https://github.com/compose-miuix-ui/miuix) 界面。
 
 **本项目构建的第一个版本** · 版本 **1.2.0** · 包名 `xiaomismartpen.plus` · versionCode `4`
 
@@ -10,7 +10,7 @@
 
 这是社区独立维护的非官方项目，与小米及其关联公司无隶属、授权或背书关系。小米、Xiaomi、MIUI、HyperOS 和相关产品名称及商标归各自权利人所有，在此仅用于说明设备兼容性。图标为本项目原创的笔与加号图形，未使用小米官方标志。
 
-**仅在小米 Pad 6 Pro、HyperOS 3 上测试通过。其他设备和系统版本尚未验证。**
+**仅在小米 Pad 6 Pro、HyperOS 3/4 上测试通过。其他设备和系统版本尚未验证。**
 
 软件按现状提供，不保证适用于所有笔、设备或 ROM。Root、LSPosed 和系统 Hook 可能影响系统输入行为；使用前请备份重要数据。遇到异常，可在 LSPosed 中停用模块并重启。完整责任与担保条款见 [Apache-2.0 许可证](LICENSE)。
 
@@ -29,7 +29,7 @@
 
 ## 安装
 
-1. 在 Root 设备安装兼容的 LSPosed。仅在小米 Pad 6 Pro、HyperOS 3 上测试通过；其他设备和系统版本尚未验证。
+1. 在 Root 设备安装兼容的 LSPosed。仅在小米 Pad 6 Pro、HyperOS 3/4 上测试通过；其他设备和系统版本尚未验证。
 2. 从本仓库 Releases 下载 APK 并安装，打开“焦点笔 Plus”设置。
 3. 在 LSPosed 启用本模块，勾选“系统框架”（`android` / `system_server`），然后重启。
 
@@ -70,7 +70,7 @@ python backend-tests/run_tests.py
 
 如 JDK 不在 PATH，可追加 `--java-home "JDK根目录"`。GitHub Actions 的后端回归、调试构建和 Android Lint 已通过。
 
-**仅在小米 Pad 6 Pro、HyperOS 3 上测试通过。** 已验证 Miuix 界面、配置保存、1.2.0 正式签名 APK 安装，以及启用系统框架作用域并重启后的笔键控制器加载。
+**仅在小米 Pad 6 Pro、HyperOS 3/4 上测试通过。** 已验证 Miuix 界面、配置保存、1.2.0 正式签名 APK 安装，以及启用系统框架作用域并重启后的笔键控制器加载。
 
 通过 ADB 向真实触控笔的 Linux 输入设备注入事件，完成 **19 项设备检查**（16 项输入与配置、3 项界面更新）：以音量动作验证两个笔键的单击 / 长按 / 双击均准确执行一次，应用专属动作与长按阈值独立生效，切换应用使用默认配置，删除专属配置后回退默认，切换焦点取消待执行动作。Miuix 界面保存设置立即生效，关闭接管后保留系统原生按键处理路径。测试后已完整恢复原有配置和媒体音量。其他设备和系统版本尚未验证。
 
