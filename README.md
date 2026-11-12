@@ -4,7 +4,7 @@
 
 为小米灵感触控笔二代提供笔键重映射和按应用独立配置的 Android / LSPosed 模块，使用 [Compose Miuix](https://github.com/compose-miuix-ui/miuix) 界面。
 
-**本项目构建的第一个版本** · 版本 **1.2.0** · 包名 `xiaomismartpen.plus` · versionCode `4`
+**当前版本 1.2.1** · 包名 `xiaomismartpen.plus` · versionCode `6`
 
 ## 项目声明
 
@@ -23,7 +23,7 @@
 - 应用配置：独立保存两个笔键的接管开关、单击 / 长按 / 双击动作，以及时间阈值。首次添加复制当前默认配置，之后互不影响。
 - 复制与删除：可复制默认配置给应用；删除专属配置后重新使用默认配置。恢复默认配置初始值会保留其他应用配置。
 
-支持音量、媒体播放、返回、桌面、最近任务、翻页、滑动、区域截屏、透传与启动应用。关闭接管，或将该笔键的三个动作均设为“不执行”，会保留原生行为。
+支持音量、媒体播放、返回、桌面、最近任务、翻页、滑动、区域截屏、透传与启动应用。1.2.1 新增笔键「左滑」「右滑」合成触摸动作：在屏幕中部做一次水平滑动，适配小说、阅读类应用的左右翻页——左滑为下一页，右滑为上一页。关闭接管，或将该笔键的三个动作均设为“不执行”，会保留原生行为。
 
 每个手势使用按下时前台应用的配置，切换焦点会取消延迟动作。保存设置会立即通知后台更新；开机早期服务不可用时每 2 秒重试，正常每 5 秒后台刷新，输入线程不执行配置 IPC。
 
@@ -76,7 +76,7 @@ python backend-tests/run_tests.py
 
 ## 开源许可
 
-项目源码以 **Apache-2.0** 开源，详见 [LICENSE](LICENSE) 和 [NOTICE](NOTICE)。本版本包含 Miuix 界面、按应用配置和原创笔与加号图标。
+项目源码以 **Apache-2.0** 开源，详见 [LICENSE](LICENSE) 和 [NOTICE](NOTICE)。本版本包含 Miuix 界面、按应用配置、左滑 \/ 右滑翻页手势和原创笔与加号图标。
 
 第三方组件保留各自版权与许可证，包括 Miuix、AndroidX / Compose、Kotlin、MaterialKolor、material-color-utilities 和 Xposed API。Xposed API 仅用于编译，由框架在运行时提供。许可文本和来源见 [第三方目录](app/src/main/assets/third_party)，并随 APK 打包。
 
