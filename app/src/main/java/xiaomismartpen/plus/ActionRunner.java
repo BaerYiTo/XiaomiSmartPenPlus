@@ -5,6 +5,8 @@ import android.content.Intent;
 import android.content.res.Resources;
 import android.hardware.input.InputManager;
 import android.media.AudioManager;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.SystemClock;
 import android.util.DisplayMetrics;
 import android.util.Log;
@@ -22,6 +24,10 @@ final class ActionRunner {
 
     /** system_server's own loader; the module's loader cannot see com.miui.server.* classes. */
     private static volatile ClassLoader systemLoader;
+    private static volatile Object nativeInput;
+    private static final Handler RESET_HANDLER = new Handler(Looper.getMainLooper());
+    private static final int POLICY_FLAG_FILTERED = 0x04000000;
+    private static final int POLICY_FLAG_PASS_TO_USER = 0x40000000;
 
     private ActionRunner() { }
 
@@ -78,8 +84,7 @@ final class ActionRunner {
                     screenshot(context);
                     break;
                 case PenConfig.ACTION_PASSTHROUGH:
-                    inject(context, penKeyCode);
-                    break;
+                    throw new IllegalStateException("Pen passthrough requires the original event");
                 default:
                     Log.w(TAG, "FPL|action|unknown " + action);
                     break;
@@ -103,13 +108,97 @@ final class ActionRunner {
         send(input, new KeyEvent(now, now + 5, KeyEvent.ACTION_UP, keyCode, 0));
     }
 
+    /** 恢复小米笔的标准翻页键，并保留设备、扫描码、重复事件及原始按压时间。 */
+    static void forwardPenEvent(Context context, KeyEvent original) {
+        sendPenEvent(context, original, POLICY_FLAG_FILTERED | POLICY_FLAG_PASS_TO_USER);
+    }
+
+    /** 结束已离开焦点的透传按压，仅清理 native 持键状态，不向新窗口发送普通 UP。 */
+    static void cancelPenEvent(Context context, KeyEvent down) {
+        KeyEvent release = new KeyEvent(down.getDownTime(), SystemClock.uptimeMillis(),
+                KeyEvent.ACTION_UP, down.getKeyCode(), 0, down.getMetaState(), down.getDeviceId(),
+                down.getScanCode(), down.getFlags() | KeyEvent.FLAG_CANCELED, down.getSource());
+        de.robv.android.xposed.XposedHelpers.callMethod(release, "setDisplayId",
+                de.robv.android.xposed.XposedHelpers.callMethod(down, "getDisplayId"));
+        sendPenEvent(context, release, POLICY_FLAG_FILTERED);
+    }
+
+    /**
+     * Injected CANCEL/UP events are delivered to windows, but they do not pass through
+     * InputDispatcher.notifyKey(), so the dispatcher can keep synthesizing repeats for the
+     * original physical device. Reset the pen device to clear that native repeat state, then
+     * bring it back online after the reset has propagated.
+     */
+    static void resetPenDevice(Context context, int deviceId) {
+        if (context == null || deviceId < 0) return;
+        try {
+            InputManager input = (InputManager) context.getSystemService(Context.INPUT_SERVICE);
+            if (input == null) return;
+            java.lang.reflect.Method disable = InputManager.class.getMethod("disableInputDevice", int.class);
+            java.lang.reflect.Method enable = InputManager.class.getMethod("enableInputDevice", int.class);
+            disable.invoke(input, deviceId);
+            Log.i(TAG, "FPL|input|reset device=" + deviceId);
+            RESET_HANDLER.postDelayed(() -> {
+                try {
+                    enable.invoke(input, deviceId);
+                    Log.i(TAG, "FPL|input|reset complete device=" + deviceId);
+                } catch (Throwable failure) {
+                    Log.w(TAG, "FPL|input|re-enable failed device=" + deviceId, failure);
+                }
+            }, 60L);
+        } catch (Throwable failure) {
+            Log.w(TAG, "FPL|input|reset failed device=" + deviceId, failure);
+        }
+    }
+
+    private static void sendPenEvent(Context context, KeyEvent original, int policyFlags) {
+        if (context == null) throw new IllegalStateException("System context unavailable");
+        int code = original.getKeyCode();
+        if (code == PenKeyController.KEY_COLOROS_LOWER) code = KeyEvent.KEYCODE_PAGE_DOWN;
+        else if (code == PenKeyController.KEY_COLOROS_UPPER) code = KeyEvent.KEYCODE_PAGE_UP;
+        KeyEvent forwarded = new KeyEvent(original.getDownTime(), original.getEventTime(),
+                original.getAction(), code, original.getRepeatCount(), original.getMetaState(),
+                original.getDeviceId(), original.getScanCode(),
+                original.getFlags() | KeyEvent.FLAG_KEEP_TOUCH_MODE, original.getSource());
+        // PAGE_UP/DOWN 是导航键；ViewRootImpl 会用首次 DOWN 退出触摸模式并抢焦点。
+        // 笔按钮应留在当前画布，让应用收到 DOWN，而不是执行键盘焦点导航。
+        // 构造器不含 displayId；按当前系统的 KeyEvent 实现复制显示目标。
+        de.robv.android.xposed.XposedHelpers.callMethod(forwarded, "setDisplayId",
+                de.robv.android.xposed.XposedHelpers.callMethod(original, "getDisplayId"));
+        // 常规 injectInputEvent 在 InputDispatcher 内强制使用虚拟设备 ID。
+        // 与 InputFilterHost 使用同一个 native 入口和 FILTERED 标志，保留原始设备身份。
+        Object accepted = de.robv.android.xposed.XposedHelpers.callMethod(nativeInput(),
+                "injectInputEvent", forwarded, false, -1, 0, 0,
+                policyFlags);
+        if (!(accepted instanceof Integer) || ((Integer) accepted) != 0) {
+            throw new IllegalStateException("Pen input rejected: " + accepted);
+        }
+    }
+
+    private static Object nativeInput() {
+        if (nativeInput != null) return nativeInput;
+        Class<?> internal = de.robv.android.xposed.XposedHelpers.findClass(
+                "com.android.server.input.InputManagerInternal", systemLoader);
+        Class<?> services = de.robv.android.xposed.XposedHelpers.findClass(
+                "com.android.server.LocalServices", systemLoader);
+        Object local = de.robv.android.xposed.XposedHelpers.callStaticMethod(services, "getService", internal);
+        if (local == null) throw new IllegalStateException("Input local service unavailable");
+        Object manager = de.robv.android.xposed.XposedHelpers.getObjectField(local, "this$0");
+        nativeInput = de.robv.android.xposed.XposedHelpers.getObjectField(manager, "mNative");
+        if (nativeInput == null) throw new IllegalStateException("Native input service unavailable");
+        return nativeInput;
+    }
+
     /** InputManager.injectInputEvent(InputEvent,int) is @hide; mode 0 = ASYNC. */
     private static void send(InputManager input, InputEvent event) {
         try {
-            InputManager.class.getMethod("injectInputEvent", InputEvent.class, int.class)
+            Object accepted = InputManager.class.getMethod("injectInputEvent", InputEvent.class, int.class)
                     .invoke(input, event, 0);
+            if (Boolean.FALSE.equals(accepted)) throw new IllegalStateException("Input injection rejected");
         } catch (Throwable failure) {
-            Log.w(TAG, "FPL|action|inject FAILED", failure);
+            throw new IllegalStateException("Input injection failed", failure);
+        } finally {
+            if (event instanceof MotionEvent) ((MotionEvent) event).recycle();
         }
     }
 
@@ -129,26 +218,14 @@ final class ActionRunner {
         injectSwipe(context, x, from, x, to);
     }
 
-    /**
-     * A horizontal swipe across the middle of the screen, for novel readers that page left/right:
-     * moving the finger toward the left goes to the next page, toward the right goes back one page.
-     * Same synthetic-touch trick as {@link #swipe(Context, boolean)}.
-     */
     private static void swipeHorizontally(Context context, boolean leftward) {
         DisplayMetrics metrics = Resources.getSystem().getDisplayMetrics();
         float y = metrics.heightPixels * 0.5f;
         float left = metrics.widthPixels * 0.25f;
         float right = metrics.widthPixels * 0.75f;
-        float from = leftward ? right : left;
-        float to = leftward ? left : right;
-        injectSwipe(context, from, y, to, y);
+        injectSwipe(context, leftward ? right : left, y, leftward ? left : right, y);
     }
 
-    /**
-     * Inject one straight drag from (x0, y0) to (x1, y1). Timestamps are laid out backwards from
-     * now, so the whole gesture is injected without blocking the input thread, yet the app still
-     * computes a realistic fling velocity from the event times.
-     */
     private static void injectSwipe(Context context, float x0, float y0, float x1, float y1) {
         InputManager input = (InputManager) context.getSystemService(Context.INPUT_SERVICE);
         if (input == null) return;
@@ -173,20 +250,25 @@ final class ActionRunner {
         return event;
     }
 
-    /** Partial screenshot through the ROM's own entry point, which is what the pen long press used. */
-    private static void screenshot(Context context) {
-        try {
-            Class<?> cls = Class.forName("com.miui.server.input.util.ShortCutActionsUtils",
-                    false, systemLoader);
-            Object instance = cls.getMethod("getInstance", Context.class).invoke(null, context);
-            Object result = cls.getMethod("triggerFunction", String.class, String.class,
-                            android.os.Bundle.class, boolean.class)
-                    .invoke(instance, "stylus_partial_screenshot", "long_press_page_up_key",
-                            null, false);
-            Log.i(TAG, "FPL|action|screenshot result=" + result);
-        } catch (Throwable failure) {
-            Log.w(TAG, "FPL|action|screenshot FAILED", failure);
+    /** 按系统调用原生区域截图，不以全屏截图替代。 */
+    private static void screenshot(Context context) throws ReflectiveOperationException {
+        if (RomProfile.detect() == RomProfile.Family.COLOROS) {
+            ColorScreenshot.run(context, systemLoader);
+            return;
         }
+        if (RomProfile.detect() != RomProfile.Family.HYPEROS) {
+            throw new IllegalStateException("Partial screenshot is unavailable for this ROM");
+        }
+        Class<?> shortcut = Class.forName("com.miui.server.input.util.ShortCutActionsUtils",
+                false, systemLoader);
+        Object instance = shortcut.getMethod("getInstance", Context.class).invoke(null, context);
+        Object result = shortcut.getMethod("triggerFunction", String.class, String.class,
+                        android.os.Bundle.class, boolean.class)
+                .invoke(instance, "stylus_partial_screenshot", "long_press_page_up_key", null, false);
+        if (Boolean.FALSE.equals(result)) {
+            throw new IllegalStateException("MIUI partial screenshot rejected");
+        }
+        Log.i(TAG, "FPL|action|screenshot result=" + result);
     }
 
     private static void launch(Context context, String pkg) {

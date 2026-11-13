@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.1.0
+
+- Merge the HyperOS and ColorOS pen-key handling paths and detect the ROM family at runtime.
+- Add ColorOS stylus system settings integration and hardware status bridge.
+- Keep the Miuix interface across systems, with the system settings entry shown only on ColorOS.
+- Add screen-swipe actions and expanded ROM, routing, bridge, and input regression coverage.
+- Set Android application ID to `com.inkdye.xiaomipen`, versionCode `22`.
+
 ## 1.2.1
 
 - Add swipe-left and swipe-right synthetic touch actions, for novel readers that page horizontally.

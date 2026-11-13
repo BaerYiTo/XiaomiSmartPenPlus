@@ -1,28 +1,31 @@
 package xiaomismartpen.plus;
 
-import android.os.Process;
+import android.app.Application;
+import android.content.Context;
+import android.util.Log;
 import de.robv.android.xposed.IXposedHookLoadPackage;
+import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
+import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
-/**
- * Entry point. Only system_server is handled: pen buttons arrive there as normal key events
- * from the "Xiaomi Smart Pen Keyboard" input device.
- */
 public final class ModuleEntry implements IXposedHookLoadPackage {
-    static final String TAG = "FocusPenLite";
-
-    @Override
-    public void handleLoadPackage(XC_LoadPackage.LoadPackageParam param) {
-        if (!"android".equals(param.packageName) || !"android".equals(param.processName)) return;
-        XposedBridge.log(TAG + " probe entry pid=" + Process.myPid());
+    @Override public void handleLoadPackage(XC_LoadPackage.LoadPackageParam param) {
         try {
-            PenKeyProbe.install(param.classLoader);
-            XposedBridge.log(TAG + " probe installed");
-            PenKeyController.install(param.classLoader);
+            if ("android".equals(param.packageName) && "android".equals(param.processName)) {
+                PenKeyController.install(param.classLoader);
+                Log.i("FocusPenLite", "FPL|module|system installed rom=" + RomProfile.detect());
+            } else if (RomProfile.detect() == RomProfile.Family.COLOROS
+                    && "com.oplus.ipemanager".equals(param.packageName)) {
+                XposedHelpers.findAndHookMethod(Application.class, "attach", Context.class,
+                    new XC_MethodHook() {
+                        @Override protected void afterHookedMethod(MethodHookParam hook) {
+                            IpeBridge.install(((Context) hook.args[0]).getClassLoader(), (Context) hook.args[0]);
+                        }
+                    });
+            }
         } catch (Throwable failure) {
-            XposedBridge.log(TAG + " probe install failed; system behaviour untouched");
-            XposedBridge.log(failure);
+            XposedBridge.log("FocusPen module install failed: " + failure);
         }
     }
 }

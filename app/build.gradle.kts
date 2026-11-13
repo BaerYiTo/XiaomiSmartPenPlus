@@ -12,16 +12,16 @@ require(releaseSigning.all { it.isNullOrBlank() } || releaseSigning.all { !it.is
 }
 
 android {
-    namespace = "xiaomismartpen.plus"
+    namespace = "com.inkdye.xiaomipen"
     compileSdk = 37
     buildToolsVersion = "37.0.0"
 
     defaultConfig {
-        applicationId = "xiaomismartpen.plus"
-        minSdk = 28
+        applicationId = "com.inkdye.xiaomipen"
+        minSdk = 34
         targetSdk = 37
-        versionCode = 6
-        versionName = "1.2.1"
+        versionCode = 22
+        versionName = "2.1.0"
     }
 
     compileOptions {
@@ -43,10 +43,17 @@ android {
         }
     }
     buildTypes {
+        getByName("debug") {
+            isMinifyEnabled = false
+        }
         getByName("release") {
             isMinifyEnabled = false
-            if (releaseSigning.all { !it.isNullOrBlank() }) signingConfig = signingConfigs.getByName("release")
+            signingConfig = signingConfigs.getByName("debug")
         }
+    }
+
+    packaging {
+        resources.excludes += setOf("/META-INF/{AL2.0,LGPL2.1}")
     }
 
     lint {
