@@ -41,7 +41,7 @@ final class PenConfig {
     /** Synthetic touch gesture. Feed apps (抖音 / 小红书 …) only navigate on touch, not on page keys. */
     static final String ACTION_SWIPE_UP = "swipe_up";
     static final String ACTION_SWIPE_DOWN = "swipe_down";
-    /** Horizontal variants, for novel readers that page left/right instead of scrolling. */
+    /** Horizontal variants for readers that turn pages with a drag. */
     static final String ACTION_SWIPE_LEFT = "swipe_left";
     static final String ACTION_SWIPE_RIGHT = "swipe_right";
     static final String ACTION_SCREENSHOT = "screenshot_partial";
@@ -94,6 +94,12 @@ final class PenConfig {
 
     private final Map<String, String> values = new LinkedHashMap<>();
     private final Map<String, PenConfig> apps = new LinkedHashMap<>();
+
+    boolean systemIntegration = true;
+    boolean dockHint = true;
+    boolean liftHint = true;
+    boolean wakeOnLift = true;
+    boolean wakeOnDock = false;
 
     long longPressMs = 400L;
     long doubleWindowMs = 300L;
@@ -159,7 +165,12 @@ final class PenConfig {
     }
 
     private void readSetting(String key, String value) {
-        if (key.equals("timing.long")) {
+        if (key.equals("system.enabled")) { systemIntegration = "true".equals(value);
+        } else if (key.equals("system.dock_hint")) { dockHint = "true".equals(value);
+        } else if (key.equals("system.lift_hint")) { liftHint = "true".equals(value);
+        } else if (key.equals("system.wake_lift")) { wakeOnLift = "true".equals(value);
+        } else if (key.equals("system.wake_dock")) { wakeOnDock = "true".equals(value);
+        } else if (key.equals("timing.long")) {
             longPressMs = clamp(parseLong(value, 400L), 200L, 1500L);
         } else if (key.equals("timing.double")) {
             doubleWindowMs = clamp(parseLong(value, 300L), 150L, 800L);
@@ -182,6 +193,11 @@ final class PenConfig {
 
     String serialize() {
         StringBuilder builder = new StringBuilder(serializeSettings());
+        builder.append("system.enabled=").append(systemIntegration).append('\n');
+        builder.append("system.dock_hint=").append(dockHint).append('\n');
+        builder.append("system.lift_hint=").append(liftHint).append('\n');
+        builder.append("system.wake_lift=").append(wakeOnLift).append('\n');
+        builder.append("system.wake_dock=").append(wakeOnDock).append('\n');
         for (Map.Entry<String, PenConfig> entry : apps.entrySet()) {
             builder.append(APP_PREFIX).append(entry.getKey()).append('=')
                     .append(Base64.getEncoder().encodeToString(
@@ -234,6 +250,11 @@ final class PenConfig {
 
     PenConfig copy() {
         PenConfig result = settingsCopy();
+        result.systemIntegration = systemIntegration;
+        result.dockHint = dockHint;
+        result.liftHint = liftHint;
+        result.wakeOnLift = wakeOnLift;
+        result.wakeOnDock = wakeOnDock;
         for (Map.Entry<String, PenConfig> entry : apps.entrySet()) {
             result.apps.put(entry.getKey(), entry.getValue().settingsCopy());
         }
@@ -275,9 +296,19 @@ final class PenConfig {
         return false;
     }
 
+    boolean passthroughOnly(String button) {
+        if (!takeover(button)) return false;
+        for (String slot : SLOTS) {
+            if (!ACTION_PASSTHROUGH.equals(action(button, slot))) return false;
+        }
+        return true;
+    }
+
     static String buttonFor(int keyCode) {
-        if (keyCode == PenKeyController.KEY_BUTTON_1) return B1;
-        if (keyCode == PenKeyController.KEY_BUTTON_2) return B2;
+        if (keyCode == PenKeyController.KEY_BUTTON_1
+                || keyCode == PenKeyController.KEY_COLOROS_LOWER) return B1;
+        if (keyCode == PenKeyController.KEY_BUTTON_2
+                || keyCode == PenKeyController.KEY_COLOROS_UPPER) return B2;
         return null;
     }
 

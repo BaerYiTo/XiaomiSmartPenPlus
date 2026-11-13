@@ -7,7 +7,7 @@ import android.os.Bundle;
 
 /** App-side persistence. system_server reads the same snapshot through {@link ConfigProvider}. */
 final class ConfigStore {
-    static final String AUTHORITY = "xiaomismartpen.plus.config";
+    static final String AUTHORITY = "com.inkdye.xiaomipen.config";
     static final Uri SNAPSHOT_URI = Uri.parse("content://" + AUTHORITY + "/snapshot");
     static final String METHOD_SNAPSHOT = "snapshot";
     static final String KEY_SNAPSHOT = "snapshot";
@@ -16,8 +16,12 @@ final class ConfigStore {
 
     private ConfigStore() { }
 
+    private static Context storageContext(Context context) {
+        return context.createDeviceProtectedStorageContext();
+    }
+
     static PenConfig load(Context context) {
-        SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        SharedPreferences prefs = storageContext(context).getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         String raw = prefs.getString(KEY_SNAPSHOT, null);
         if (raw == null) {
             PenConfig initial = importPreviousPackage(context);
@@ -44,10 +48,11 @@ final class ConfigStore {
     }
 
     static void save(Context context, PenConfig config) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        boolean saved = storageContext(context).getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .edit()
                 .putString(KEY_SNAPSHOT, config.serialize())
-                .apply();
+                .commit();
+        if (!saved) throw new IllegalStateException("Configuration could not be saved");
         context.getContentResolver().notifyChange(SNAPSHOT_URI, null);
     }
 }

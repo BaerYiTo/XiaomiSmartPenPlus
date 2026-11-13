@@ -1,0 +1,9 @@
+<resources>
+    <style name="Theme.FocusPen" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:colorAccent">#2B7CEE</item>
+    </style>
+    <string-array name="xposed_scope"><item>android</item><item>com.oplus.ipemanager</item></string-array>
+</resources>

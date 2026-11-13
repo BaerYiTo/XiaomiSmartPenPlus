@@ -56,7 +56,7 @@ public final class ConfigStoreTests {
         eq(edited.serialize(), saved(context), "new app edits persist independently");
         eq(unchangedOld, ContentResolver.snapshot, "new app save does not write to previous provider");
         eq(1, ContentResolver.changes, "save emits one change notification");
-        eq("content://xiaomismartpen.plus.config/snapshot", ContentResolver.lastNotifyUri, "save notifies the new package authority");
+        eq("content://com.inkdye.xiaomipen.config/snapshot", ContentResolver.lastNotifyUri, "save notifies the new package authority");
         eq(edited.serialize(), ConfigStore.load(context).serialize(), "saved new edits survive reload");
         eq(1, ContentResolver.snapshotReads, "new edits never trigger a second import");
     }

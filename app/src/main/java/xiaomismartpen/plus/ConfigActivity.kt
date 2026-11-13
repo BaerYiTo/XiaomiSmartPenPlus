@@ -1,41 +1,62 @@
 package xiaomismartpen.plus
 
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.graphics.Canvas
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import androidx.core.graphics.drawable.toBitmap
+import com.inkdye.xiaomipen.BuildConfig
+import com.inkdye.xiaomipen.R
 import top.yukonga.miuix.kmp.basic.*
+import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.icon.extended.Back
+import top.yukonga.miuix.kmp.icon.extended.GridView
+import top.yukonga.miuix.kmp.icon.extended.Home
+import top.yukonga.miuix.kmp.icon.extended.Info
 import top.yukonga.miuix.kmp.overlay.OverlayDialog
 import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
@@ -43,600 +64,653 @@ import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.theme.darkColorScheme
 import top.yukonga.miuix.kmp.theme.lightColorScheme
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.Collator
 import java.util.Locale
 import java.util.concurrent.Executors
-import kotlin.math.roundToLong
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.roundToInt
 
-/** Compose and Miuix are loaded only in the configuration app, never in the hook host. */
 class ConfigActivity : ComponentActivity() {
-    private var config by mutableStateOf<PenConfig?>(null)
-    private var saveStatus by mutableStateOf("正在载入配置")
-    private var message by mutableStateOf<String?>(null)
-    private var saveGeneration = 0L
-    private val mainHandler = Handler(Looper.getMainLooper())
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             val dark = isSystemInDarkTheme()
             SideEffect {
                 enableEdgeToEdge(
-                    statusBarStyle = SystemBarStyle.auto(
-                        android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT,
-                    ) { dark },
-                    navigationBarStyle = SystemBarStyle.auto(
-                        android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT,
-                    ) { dark },
+                    statusBarStyle = SystemBarStyle.auto(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT) { dark },
+                    navigationBarStyle = SystemBarStyle.auto(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT) { dark },
                 )
             }
             MiuixTheme(colors = if (dark) darkColorScheme() else lightColorScheme()) {
-                ConfigScreen()
+                Scaffold { PenApp() }
             }
         }
     }
+}
 
-    private fun updateConfig(packageName: String?, edit: (PenConfig) -> Unit) {
-        val next = config?.copy() ?: return
-        val target = if (packageName == null) next else next.appConfig(packageName) ?: return
-        edit(target)
-        persist(next)
+private data class AppEntry(val pkg: String, val label: String, val icon: Bitmap?)
+private data class Confirmation(val title: String, val body: String, val apply: () -> Unit)
+// 读写使用同一跨 Activity 队列，旋转和主题切换不取消已经提交的保存。
+private val persistence = Executors.newSingleThreadExecutor()
+private val persistenceCallbacks = Handler(Looper.getMainLooper())
+
+@Composable
+private fun PenApp() {
+    val context = LocalContext.current
+    val resources = LocalResources.current
+    val rom = remember { RomProfile.detect() }
+    val scope = rememberCoroutineScope()
+    val attached = remember { AtomicBoolean(true) }
+    DisposableEffect(Unit) { onDispose { attached.set(false) } }
+    var config by remember { mutableStateOf<PenConfig?>(null) }
+    var apps by remember { mutableStateOf<List<AppEntry>>(emptyList()) }
+    var extraApps by remember { mutableStateOf<Map<String, AppEntry>>(emptyMap()) }
+    var appsLoaded by remember { mutableStateOf(false) }
+    var appLoadError by remember { mutableStateOf(false) }
+    var appLoadGeneration by remember { mutableIntStateOf(0) }
+    var state by remember { mutableStateOf(HardwareState.read(context)) }
+    var moduleActive by remember { mutableStateOf(false) }
+    var ipeActive by remember { mutableStateOf(false) }
+    var saveStatus by remember { mutableStateOf(resources.getString(R.string.loading)) }
+    var saveGeneration by remember { mutableLongStateOf(0) }
+    var tab by rememberSaveable { mutableIntStateOf(0) }
+    var profilePkg by rememberSaveable { mutableStateOf<String?>(null) }
+    var devicePage by rememberSaveable { mutableStateOf(false) }
+    var picker by rememberSaveable { mutableStateOf<String?>(null) }
+    var pickerProfile by rememberSaveable { mutableStateOf<String?>(null) }
+    var pickerButton by rememberSaveable { mutableStateOf(PenConfig.B1) }
+    var pickerSlot by rememberSaveable { mutableStateOf(PenConfig.SHORT) }
+    var pickerQuery by rememberSaveable { mutableStateOf("") }
+    var appQuery by rememberSaveable { mutableStateOf("") }
+    var confirmation by remember { mutableStateOf<Confirmation?>(null) }
+    var result by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    val catalog = remember(apps, extraApps) { extraApps + apps.associateBy { it.pkg } }
+    fun s(id: Int) = resources.getString(id)
+
+    LaunchedEffect(Unit) {
+        try {
+            val appContext = context.applicationContext
+            config = withContext(Dispatchers.IO) { persistence.submit<PenConfig> { ConfigStore.load(appContext) }.get() }
+            saveStatus = s(R.string.saved)
+        } catch (failure: CancellationException) { throw failure }
+        catch (failure: Exception) {
+            saveStatus = s(R.string.failed)
+            result = saveStatus to (failure.message ?: failure.toString())
+        }
+    }
+    LaunchedEffect(appLoadGeneration) {
+        appsLoaded = false
+        appLoadError = false
+        try {
+            apps = withContext(Dispatchers.IO) {
+                val pm = context.packageManager
+                val collator = Collator.getInstance(Locale.getDefault())
+                pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
+                    .map { AppEntry(it.activityInfo.packageName, it.loadLabel(pm).toString(),
+                        runCatching { it.loadIcon(pm).toBitmap(96, 96) }.getOrNull()) }
+                    .distinctBy { it.pkg }.sortedWith { a, b -> collator.compare(a.label, b.label) }
+            }
+        } catch (failure: CancellationException) { throw failure }
+        catch (_: Exception) { appLoadError = true }
+        finally { appsLoaded = true }
+    }
+    val referencedPackages = config?.let { cfg ->
+        buildSet {
+            addAll(cfg.appPackages())
+            for (profile in listOf(cfg) + cfg.appPackages().mapNotNull { cfg.appConfig(it) }) {
+                for (button in listOf(PenConfig.B1, PenConfig.B2)) for (slot in PenConfig.SLOTS) {
+                    val action = profile.action(button, slot)
+                    if (action.startsWith(PenConfig.ACTION_LAUNCH_PREFIX)) add(action.removePrefix(PenConfig.ACTION_LAUNCH_PREFIX))
+                }
+            }
+        }
+    } ?: emptySet()
+    LaunchedEffect(config?.appPackages(), profilePkg) {
+        if (config != null && profilePkg != null && config?.appConfig(profilePkg) == null) profilePkg = null
+    }
+    LaunchedEffect(referencedPackages, apps) {
+        extraApps = withContext(Dispatchers.IO) {
+            referencedPackages.filter { pkg -> apps.none { it.pkg == pkg } }.associateWith { pkg ->
+                runCatching {
+                    val pm = context.packageManager
+                    val info = pm.getApplicationInfo(pkg, 0)
+                    AppEntry(pkg, pm.getApplicationLabel(info).toString(),
+                        runCatching { pm.getApplicationIcon(info).toBitmap(96, 96) }.getOrNull())
+                }.getOrElse { AppEntry(pkg, pkg, null) }
+            }
+        }
+    }
+    LaunchedEffect(Unit) {
+        while (true) {
+            state = HardwareState.read(context)
+            fun live(key: String): Boolean {
+                val at = Settings.Global.getLong(context.contentResolver, key, 0)
+                val age = SystemClock.elapsedRealtime() - at
+                return at > 0 && age in 0..45000
+            }
+            moduleActive = live("focuspen_module_heartbeat")
+            ipeActive = live("focuspen_ipe_heartbeat")
+            delay(1500)
+        }
     }
 
-    private fun persist(next: PenConfig) {
+    fun save(next: PenConfig) {
+        if (config == null) return
         config = next
         val generation = ++saveGeneration
-        saveStatus = "正在保存"
-        val appContext = applicationContext
-        // Saves and reads share one queue: a recreated Activity cannot load before a pending save.
+        saveStatus = s(R.string.saving)
+        val appContext = context.applicationContext
         persistence.execute {
             val failure = runCatching { ConfigStore.save(appContext, next) }.exceptionOrNull()
-            mainHandler.post {
-                if (!isDestroyed && generation == saveGeneration) {
-                    saveStatus = if (failure == null) "已保存" else "保存未完成"
-                    if (failure != null) message = "无法保存配置，请返回后重试。"
+            persistenceCallbacks.post {
+                if (attached.get() && generation == saveGeneration) {
+                    saveStatus = appContext.getString(if (failure == null) R.string.saved else R.string.failed)
+                    if (failure != null) result = saveStatus to (failure.message ?: failure.toString())
                 }
             }
         }
     }
-
-    @Composable
-    private fun ConfigScreen() {
-        var page by rememberSaveable { mutableIntStateOf(0) }
-        var selectedPackage by rememberSaveable { mutableStateOf<String?>(null) }
-        var appSearch by rememberSaveable { mutableStateOf("") }
-        var chooser by rememberSaveable { mutableStateOf("") }
-        var chooserSearch by rememberSaveable { mutableStateOf("") }
-        var chooserProfile by rememberSaveable { mutableStateOf<String?>(null) }
-        var chooserButton by rememberSaveable { mutableStateOf(PenConfig.B1) }
-        var chooserSlot by rememberSaveable { mutableStateOf(PenConfig.SHORT) }
-        var deletePackage by rememberSaveable { mutableStateOf<String?>(null) }
-        var resetRequested by rememberSaveable { mutableStateOf(false) }
-        var resetProfile by rememberSaveable { mutableStateOf<String?>(null) }
-        var apps by remember { mutableStateOf<List<PenApp>>(emptyList()) }
-        var appsLoaded by remember { mutableStateOf(false) }
-        var appLoadError by remember { mutableStateOf(false) }
-        var appLoadGeneration by remember { mutableIntStateOf(0) }
-
-        LaunchedEffect(Unit) {
-            val result = withContext(Dispatchers.IO) {
-                runCatching { persistence.submit<PenConfig> { ConfigStore.load(applicationContext) }.get() }
-            }
-            result.onSuccess {
-                config = it
-                saveStatus = "配置已载入"
-            }.onFailure {
-                saveStatus = "配置载入失败"
-                message = "无法载入已保存的配置。请关闭页面后重试，现有配置没有被覆盖。"
-            }
+    fun edit(pkg: String?, change: (PenConfig) -> Unit) {
+        val next = config?.copy() ?: return
+        val profile = if (pkg == null) next else next.appConfig(pkg) ?: return
+        change(profile)
+        save(next)
+    }
+    fun chooseApp(kind: String, pkg: String? = null, button: String = PenConfig.B1, slot: String = PenConfig.SHORT) {
+        pickerProfile = pkg
+        pickerButton = button
+        pickerSlot = slot
+        pickerQuery = ""
+        picker = kind
+    }
+    fun runTask(action: () -> String, title: String) {
+        if (busy) return
+        busy = true
+        scope.launch {
+            try { result = title to withContext(Dispatchers.IO) { action() } }
+            catch (failure: CancellationException) { throw failure }
+            catch (failure: Exception) { result = s(R.string.failed) to (failure.message ?: failure.toString()) }
+            finally { busy = false }
         }
-        LaunchedEffect(appLoadGeneration) {
-            appsLoaded = false
-            val result = withContext(Dispatchers.IO) { runCatching { loadLaunchableApps() } }
-            apps = result.getOrDefault(emptyList())
-            appLoadError = result.isFailure
-            appsLoaded = true
+    }
+    fun openUrl(url: String) {
+        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+            .onFailure { result = s(R.string.failed) to s(R.string.browser_error) }
+    }
+    fun goBack() {
+        when {
+            picker != null -> picker = null
+            devicePage -> devicePage = false
+            tab == 1 && profilePkg != null -> profilePkg = null
+            tab != 0 -> tab = 0
         }
+    }
+    BackHandler(picker != null || devicePage || (tab == 1 && profilePkg != null) || tab != 0) { goBack() }
+    val cfg = config
+    // 恢复的导航状态不能在其他 ROM 重新打开 ColorOS 专属页面。
+    val systemPage = devicePage && rom == RomProfile.Family.COLOROS
+    LaunchedEffect(rom) { if (rom != RomProfile.Family.COLOROS) devicePage = false }
+    val selected = profilePkg.takeIf { tab == 1 && !systemPage }
+    val current = if (selected == null) cfg else cfg?.appConfig(selected)
+    val pageKey = if (systemPage) "device" else if (selected != null) "profile:$selected" else "tab:$tab"
 
-        val current = config
-        // Preserve entries for uninstalled/non-launcher apps and obtain their labels off the UI thread.
-        val packages = current?.appPackages().orEmpty()
-        var extraApps by remember { mutableStateOf<Map<String, PenApp>>(emptyMap()) }
-        LaunchedEffect(packages, apps) {
-            val known = apps.map { it.pkg }.toSet()
-            extraApps = withContext(Dispatchers.IO) {
-                packages.filter { it !in known }.associateWith { loadApp(it, launchable = false) }
-            }
-        }
-        val catalog = remember(apps, extraApps) { apps.associateBy { it.pkg } + extraApps }
-        LaunchedEffect(current != null, packages, selectedPackage) {
-            if (current != null && selectedPackage != null && selectedPackage !in packages) selectedPackage = null
-        }
-
-        fun openAppChooser(mode: String, profile: String? = null, button: String = PenConfig.B1,
-                           slot: String = PenConfig.SHORT) {
-            chooserProfile = profile
-            chooserButton = button
-            chooserSlot = slot
-            chooserSearch = ""
-            chooser = mode
-        }
-
-        BackHandler(
-            enabled = chooser.isEmpty() && deletePackage == null && !resetRequested && message == null &&
-                page != 0,
-        ) {
-            if (selectedPackage != null && page == 1) selectedPackage = null else page = 0
-        }
-
-        val lists = List(4) { rememberLazyListState() }
-        val appBars = List(4) { rememberTopAppBarState() }
-        val screen = when { page == 0 -> 0; page == 1 && selectedPackage == null -> 1; page == 1 -> 2; else -> 3 }
-        val listState = lists[screen]
-        val scrollBehavior = MiuixScrollBehavior(state = appBars[screen],
-            canScroll = { listState.canScrollBackward || listState.canScrollForward })
-        Scaffold(
-            modifier = Modifier.fillMaxSize(),
-            topBar = {
-                TopAppBar(
-                    title = "焦点笔 Plus",
-                    subtitle = if (page == 1 && selectedPackage != null) "应用专属配置" else "Plus · 笔键配置",
-                    scrollBehavior = scrollBehavior,
-                )
-            },
-        ) { insets ->
-            Box(
-                Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets),
-                contentAlignment = Alignment.TopCenter,
-            ) {
-                Column(Modifier.widthIn(max = 1040.dp).fillMaxWidth()) {
-                    TabRow(
-                        tabs = listOf("默认配置", "应用配置", "关于"),
-                        selectedTabIndex = page,
-                        onTabSelected = { page = it },
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-                        height = 48.dp,
-                    )
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize().nestedScroll(scrollBehavior.nestedScrollConnection),
-                        state = listState,
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
-                        verticalArrangement = Arrangement.spacedBy(14.dp),
-                    ) {
-                        if (current == null) {
-                            item { InfoCard(saveStatus, "正在读取你的笔键设置。") }
-                        } else when (page) {
-                            0 -> {
-                                item {
-                                    InfoCard("默认配置", "没有专属配置的应用使用这一组设置。更改会自动保存。", saveStatus)
-                                }
-                                item {
-                                    ProfileEditor(
-                                        current, null, catalog,
-                                        onEdit = { edit -> updateConfig(null, edit) },
-                                        onChooseLaunch = { button, slot -> openAppChooser("action", null, button, slot) },
-                                    )
-                                }
-                                item {
-                                    TextButton("恢复默认配置的初始值", onClick = {
-                                        resetProfile = null
-                                        resetRequested = true
-                                    },
-                                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp))
-                                }
-                                item { GestureGuide() }
+    Box(Modifier.fillMaxSize()) {
+            PenPage(tab, systemPage, selected != null, pageKey, onTab = { tab = it; devicePage = false }, onBack = ::goBack) {
+                if (cfg == null) item { InfoCard(saveStatus, s(R.string.loading_info)) }
+                else if (systemPage) {
+                    item { ActionButton(s(R.string.back_default), onClick = { devicePage = false }) }
+                    item { InfoCard(s(R.string.device_settings), s(if (rom == RomProfile.Family.COLOROS) R.string.integration_info else R.string.native_system_info), saveStatus) }
+                    item { DeviceSettings(cfg, rom, state, moduleActive, ipeActive, busy,
+                        onEdit = { change -> edit(null, change) },
+                        onInstall = { runTask({ RootTools.install(context) }, s(R.string.setup_success)) },
+                        onLsposed = { runTask({ RootTools.openLsposed(); s(lsposedInfoResource(rom)) }, s(R.string.open_lsposed)) },
+                        onSystemPage = {
+                            runCatching { SystemSettings.open(context) }
+                                .onFailure { result = s(R.string.failed) to (it.message ?: it.toString()) }
+                        }) }
+                } else when (tab) {
+                    0 -> {
+                        item { InfoCard(s(R.string.tab_default), s(R.string.default_info), saveStatus) }
+                        item { ProfileEditor(cfg, false, catalog, { change -> edit(null, change) },
+                            { button, slot -> chooseApp("launch", null, button, slot) }) }
+                        item { ActionButton(s(R.string.reset_default), onClick = {
+                            confirmation = Confirmation(s(R.string.reset_default), s(R.string.reset_confirm)) {
+                                edit(null) { replaceSettings(it, PenConfig.defaults()) }
                             }
-                            1 -> {
-                                val selected = selectedPackage
-                                val appConfig = selected?.let { current.appConfig(it) }
-                                if (selected != null && appConfig != null) {
-                                    item {
-                                        TextButton("返回应用列表", onClick = { selectedPackage = null },
-                                            modifier = Modifier.heightIn(min = 48.dp))
+                        }) }
+                        item { GestureGuide() }
+                        if (rom == RomProfile.Family.COLOROS) item { PenCard {
+                            Preference(s(R.string.device_settings), s(R.string.device_settings_info), arrow = true,
+                                onClick = { devicePage = true })
+                        } }
+                    }
+                    1 -> if (selected != null && current != null) {
+                        item { ActionButton(s(R.string.back_apps), onClick = { profilePkg = null }) }
+                        item { InfoCard(catalog[selected]?.label ?: selected, selected + "\n" + s(R.string.app_info), saveStatus) }
+                        item { ProfileEditor(current, true, catalog, { change -> edit(selected, change) },
+                            { button, slot -> chooseApp("launch", selected, button, slot) }) }
+                        item {
+                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                ActionButton(s(R.string.copy_default), onClick = {
+                                    confirmation = Confirmation(s(R.string.copy_default), s(R.string.copy_confirm)) {
+                                        val latest = config
+                                        if (latest != null) edit(selected) { replaceSettings(it, latest) }
                                     }
-                                    item {
-                                        InfoCard(catalog[selected]?.label ?: selected,
-                                            "$selected\n仅在此应用位于前台时使用。所有笔键和时间阈值独立保存。", saveStatus)
+                                })
+                                ActionButton(s(R.string.delete_profile), onClick = {
+                                    confirmation = Confirmation(s(R.string.delete_profile), s(R.string.delete_confirm)) {
+                                        config?.copy()?.let { next -> next.removeAppConfig(selected); save(next) }
+                                        profilePkg = null
                                     }
-                                    item {
-                                        ProfileEditor(appConfig, selected, catalog,
-                                            onEdit = { edit -> updateConfig(selected, edit) },
-                                            onChooseLaunch = { button, slot -> openAppChooser("action", selected, button, slot) })
-                                    }
-                                    item {
-                                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                            TextButton("复制当前默认配置", onClick = {
-                                                resetProfile = selected
-                                                resetRequested = true
-                                            },
-                                                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp))
-                                            TextButton("删除此应用配置", onClick = { deletePackage = selected },
-                                                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp))
-                                        }
-                                    }
-                                    item { GestureGuide() }
-                                } else {
-                                    item {
-                                        InfoCard("按应用配置", "为不同应用设置不同的笔键动作。添加时复制当前默认配置，以后各自独立。",
-                                            "${packages.size} 个应用已有专属配置")
-                                    }
-                                    item {
-                                        TextButton("添加应用配置", onClick = { openAppChooser("profile") },
-                                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                                            colors = ButtonDefaults.textButtonColorsPrimary())
-                                    }
-                                    item {
-                                        TextField(value = appSearch, onValueChange = { appSearch = it },
-                                            label = "搜索已配置的应用或包名", singleLine = true,
-                                            modifier = Modifier.fillMaxWidth())
-                                    }
-                                    val filtered = packages.filter {
-                                        it.contains(appSearch.trim(), ignoreCase = true) ||
-                                            catalog[it]?.label?.contains(appSearch.trim(), ignoreCase = true) == true
-                                    }.sortedWith(compareBy { catalog[it]?.label ?: it })
-                                    if (filtered.isEmpty()) item {
-                                        InfoCard(if (packages.isEmpty()) "还没有应用配置" else "没有匹配的应用",
-                                            if (packages.isEmpty()) "添加一个应用，为它设置专属笔键。其余应用继续使用默认配置。" else "试试应用名称或包名。")
-                                    }
-                                    items(filtered, key = { it }) { pkg ->
-                                        val profile = current.appConfig(pkg)!!
-                                        Card(Modifier.fillMaxWidth()) {
-                                            ArrowPreference(
-                                                title = catalog[pkg]?.label ?: pkg,
-                                                summary = "$pkg\n笔键 1：${ownershipLabel(profile, PenConfig.B1)} · 笔键 2：${ownershipLabel(profile, PenConfig.B2)}",
-                                                startAction = { AppIcon(catalog[pkg]) },
-                                                onClick = { selectedPackage = pkg },
-                                            )
-                                        }
-                                    }
-                                }
+                                })
                             }
-                            else -> item { About() }
                         }
-                        item { Spacer(Modifier.height(10.dp)) }
-                    }
-                }
-            }
-
-            OverlayDialog(
-                show = chooser.isNotEmpty(),
-                title = if (chooser == "profile") "选择应用" else "选择要启动的应用",
-                summary = if (chooser == "profile") "新配置从当前默认配置复制；已有配置会直接打开。" else "选择具有桌面入口的应用。",
-                onDismissRequest = { chooser = "" },
-            ) {
-                TextField(value = chooserSearch, onValueChange = { chooserSearch = it },
-                    label = "搜索名称或包名", singleLine = true, modifier = Modifier.fillMaxWidth())
-                Spacer(Modifier.height(12.dp))
-                val found = apps.filter {
-                    val query = chooserSearch.trim()
-                    it.label.contains(query, ignoreCase = true) || it.pkg.contains(query, ignoreCase = true)
-                }
-                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 360.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (!appsLoaded) item { DialogHint("正在读取应用列表…") }
-                    else if (appLoadError) item { DialogHint("无法读取应用列表，请重试。") }
-                    else if (found.isEmpty()) item {
-                        DialogHint(if (apps.isEmpty()) "没有找到可启动的应用。" else "没有匹配的应用。")
-                    }
-                    items(found, key = { it.pkg }) { app ->
-                        ArrowPreference(
-                            title = app.label,
-                            summary = app.pkg + if (chooser == "profile" && app.pkg in packages) " · 已配置" else "",
-                            startAction = { AppIcon(app) },
-                            insideMargin = PaddingValues(horizontal = 4.dp, vertical = 12.dp),
-                            enabled = current != null,
-                            onClick = {
-                                if (chooser == "profile") {
-                                    val next = config?.copy()
-                                    if (next != null) {
-                                        if (next.appConfig(app.pkg) == null) {
-                                            next.ensureAppConfig(app.pkg)
-                                            persist(next)
-                                        }
-                                        selectedPackage = app.pkg
-                                        page = 1
-                                    }
-                                } else updateConfig(chooserProfile) {
-                                    it.setAction(chooserButton, chooserSlot, PenConfig.ACTION_LAUNCH_PREFIX + app.pkg)
-                                }
-                                chooser = ""
-                            },
-                        )
-                    }
-                }
-                Spacer(Modifier.height(12.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    TextButton("取消", onClick = { chooser = "" }, modifier = Modifier.weight(1f).heightIn(min = 48.dp))
-                    if (appLoadError) TextButton("重试", onClick = { appLoadGeneration++ },
-                        modifier = Modifier.weight(1f).heightIn(min = 48.dp))
-                }
-            }
-
-            OverlayDialog(
-                show = deletePackage != null,
-                title = "删除应用配置？",
-                summary = "${deletePackage?.let { catalog[it]?.label } ?: deletePackage.orEmpty()} 将重新使用默认配置。其他应用的配置会保留。",
-                onDismissRequest = { deletePackage = null },
-            ) {
-                ConfirmButtons("删除", enabled = current != null, onCancel = { deletePackage = null }) {
-                    deletePackage?.let { pkg ->
-                        config?.copy()?.let { next ->
-                            next.removeAppConfig(pkg)
-                            persist(next)
-                            if (selectedPackage == pkg) selectedPackage = null
+                        item { GestureGuide() }
+                    } else {
+                        item { InfoCard(s(R.string.apps_title), s(R.string.apps_info), resources.getString(R.string.profile_count, cfg.appPackages().size)) }
+                        item { ActionButton(s(R.string.add_app), primary = true, onClick = { chooseApp("add") }) }
+                        item { AppSearch(appQuery, { appQuery = it }, s(R.string.search_profiles)) }
+                        val filtered = cfg.appPackages().map { catalog[it] ?: AppEntry(it, it, null) }
+                            .filter { matches(it, appQuery) }.sortedBy { it.label }
+                        if (filtered.isEmpty()) item { InfoCard(s(if (cfg.appPackages().isEmpty()) R.string.no_profiles else R.string.no_matches),
+                            s(if (cfg.appPackages().isEmpty()) R.string.no_profiles_info else R.string.no_matches_info)) }
+                        items(filtered, key = { it.pkg }) { app ->
+                            PenCard {
+                                val profile = cfg.appConfig(app.pkg)
+                                AppRow(app, profile?.let { resources.getString(R.string.profile_summary, ownershipLabel(it, PenConfig.B1, context),
+                                    ownershipLabel(it, PenConfig.B2, context)) }, onClick = { profilePkg = app.pkg })
+                            }
                         }
                     }
-                    deletePackage = null
-                }
-            }
-
-            OverlayDialog(
-                show = resetRequested,
-                title = if (resetProfile == null) "恢复初始配置？" else "复制默认配置？",
-                summary = if (resetProfile == null) "默认配置的笔键动作与时间阈值将恢复初始值。已添加的应用配置会保留。"
-                    else "此应用的笔键动作与时间阈值将替换为当前默认配置。其他应用的配置会保留。",
-                onDismissRequest = { resetRequested = false },
-            ) {
-                ConfirmButtons(if (resetProfile == null) "恢复" else "复制", enabled = current != null,
-                    onCancel = { resetRequested = false }) {
-                    val source = if (resetProfile == null) PenConfig.defaults() else config
-                    if (source != null) updateConfig(resetProfile) { replaceSettings(it, source) }
-                    resetRequested = false
-                }
-            }
-            OverlayDialog(show = message != null, title = "焦点笔 Plus", summary = message,
-                onDismissRequest = { message = null }) {
-                TextButton("知道了", onClick = { message = null }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp))
-            }
-        }
-    }
-
-    @Composable
-    private fun ProfileEditor(
-        profile: PenConfig,
-        packageName: String?,
-        catalog: Map<String, PenApp>,
-        onEdit: ((PenConfig) -> Unit) -> Unit,
-        onChooseLaunch: (String, String) -> Unit,
-    ) {
-        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            BoxWithConstraints(Modifier.fillMaxWidth()) {
-                if (maxWidth >= 800.dp) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                        ButtonCard(profile, PenConfig.B1, catalog, onEdit, onChooseLaunch, Modifier.weight(1f))
-                        ButtonCard(profile, PenConfig.B2, catalog, onEdit, onChooseLaunch, Modifier.weight(1f))
+                    else -> {
+                        item { InfoCard(s(R.string.app_name), s(R.string.about_info), resources.getString(R.string.version, BuildConfig.VERSION_NAME)) }
+                        item { TextCard(s(R.string.usage_title), listOf(s(R.string.usage_enable), s(R.string.usage_profiles), s(R.string.usage_native))) }
+                        item { TextCard(s(R.string.declaration_title), listOf(s(R.string.declaration_tested), s(R.string.declaration_community))) }
+                        item { PenCard {
+                            Preference(s(R.string.source_project), "BaerYiTo/XiaomiSmartPenPlus · Apache-2.0", arrow = true,
+                                onClick = { openUrl("https://github.com/BaerYiTo/XiaomiSmartPenPlus") })
+                            Preference(s(R.string.ui_project), "compose-miuix-ui/miuix · Apache-2.0", arrow = true,
+                                onClick = { openUrl("https://github.com/compose-miuix-ui/miuix") })
+                        } }
+                        item { PenCard {
+                            Preference(s(R.string.licenses), s(R.string.license_info), arrow = true, enabled = !busy, onClick = {
+                                runTask({ listOf("Project-NOTICE.txt", "NOTICE.txt", "Miuix-LICENSE.txt", "Apache-2.0.txt", "Project-LICENSE.txt")
+                                    .joinToString("\n\n") { file -> file + "\n\n" + context.assets.open("third_party/$file").bufferedReader().use { it.readText() } }
+                                }, s(R.string.licenses))
+                            })
+                            Preference(s(R.string.diagnostics), arrow = true, enabled = !busy,
+                                onClick = { runTask(RootTools::diagnostics, s(R.string.diagnostics)) })
+                        } }
                     }
-                } else Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                    ButtonCard(profile, PenConfig.B1, catalog, onEdit, onChooseLaunch)
-                    ButtonCard(profile, PenConfig.B2, catalog, onEdit, onChooseLaunch)
+                }
+                item { Spacer(Modifier.height(10.dp)) }
+            }
+        if (picker != null) AppPicker(
+            title = s(if (picker == "add") R.string.choose_app else R.string.choose_launch_app),
+            description = s(if (picker == "add") R.string.choose_profile_info else R.string.choose_launch_info),
+            apps = apps, configured = if (picker == "add") cfg?.appPackages()?.toSet().orEmpty() else emptySet(),
+            loaded = appsLoaded, error = appLoadError, enabled = cfg != null, query = pickerQuery, onQuery = { pickerQuery = it },
+            onDismiss = { picker = null }, onRetry = { appLoadGeneration++ }, onSelect = { app ->
+                if (config == null) return@AppPicker
+                if (picker == "add") {
+                    config?.copy()?.let { next ->
+                        if (next.appConfig(app.pkg) == null) { next.ensureAppConfig(app.pkg); save(next) }
+                        profilePkg = app.pkg
+                        tab = 1
+                    }
+                } else edit(pickerProfile) { it.setAction(pickerButton, pickerSlot, PenConfig.ACTION_LAUNCH_PREFIX + app.pkg) }
+                picker = null
+            })
+    }
+    OverlayDialog(show = confirmation != null, onDismissRequest = { confirmation = null },
+        title = confirmation?.title, summary = confirmation?.body) {
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            TextButton(s(R.string.cancel), onClick = { confirmation = null }, modifier = Modifier.weight(1f).heightIn(min = 48.dp))
+            TextButton(s(R.string.confirm), onClick = { confirmation?.apply?.invoke(); confirmation = null },
+                modifier = Modifier.weight(1f).heightIn(min = 48.dp), colors = ButtonDefaults.textButtonColorsPrimary())
+        }
+    }
+    OverlayDialog(show = result != null, onDismissRequest = { result = null }, title = result?.first) {
+        val bodyScroll = rememberScrollState()
+        LaunchedEffect(result) { bodyScroll.scrollTo(0) }
+        Text(text = result?.second.orEmpty(), fontSize = 14.sp,
+            modifier = Modifier.fillMaxWidth()
+                .heightIn(max = (LocalConfiguration.current.screenHeightDp * .38f).coerceAtLeast(80f).dp)
+                .verticalScroll(bodyScroll))
+        Spacer(Modifier.height(12.dp))
+        TextButton(s(R.string.confirm), onClick = { result = null }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+            colors = ButtonDefaults.textButtonColorsPrimary())
+    }
+}
+
+@Composable
+private fun PenPage(tab: Int, device: Boolean, appProfile: Boolean, pageKey: String, onTab: (Int) -> Unit,
+                    onBack: () -> Unit, content: LazyListScope.() -> Unit) {
+    val pages = rememberSaveableStateHolder()
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val expandedRail = maxWidth >= 1000.dp
+        Row(Modifier.fillMaxSize()) {
+            NavigationRail(expanded = expandedRail, expandedWidth = 216.dp) {
+                val icons = listOf(MiuixIcons.Home, MiuixIcons.GridView, MiuixIcons.Info)
+                listOf(R.string.tab_default, R.string.tab_apps, R.string.tab_about).forEachIndexed { index, id ->
+                    NavigationRailItem(selected = tab == index, onClick = { onTab(index) },
+                        icon = icons[index], label = stringResource(id), modifier = Modifier.heightIn(min = 56.dp))
                 }
             }
-            Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(18.dp)) {
-                Text("识别时间", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(6.dp))
-                SecondaryText(if (packageName == null) "默认配置中的长按与双击阈值。" else "这组阈值仅用于当前应用。")
-                Spacer(Modifier.height(20.dp))
-                TimingSlider("长按阈值", profile.longPressMs, 200f..1500f, 129,
-                    "按住多久后识别为长按。") { value -> onEdit { it.longPressMs = value } }
-                Spacer(Modifier.height(20.dp))
-                TimingSlider("双击间隔", profile.doubleWindowMs, 150f..800f, 64,
-                    "两次点击之间允许的最长间隔；越大，单击响应等待越久。") { value -> onEdit { it.doubleWindowMs = value } }
+            Box(Modifier.weight(1f).fillMaxHeight()) {
+                pages.SaveableStateProvider(pageKey) {
+                    PageContent(device, appProfile, onBack, content)
+                }
             }
         }
     }
+}
 
-    @Composable
-    private fun ButtonCard(
-        profile: PenConfig,
-        button: String,
-        catalog: Map<String, PenApp>,
-        onEdit: ((PenConfig) -> Unit) -> Unit,
-        onChooseLaunch: (String, String) -> Unit,
-        modifier: Modifier = Modifier,
-    ) {
-        Card(modifier.fillMaxWidth()) {
-            SwitchPreference(
-                checked = profile.takeover(button),
-                onCheckedChange = { checked -> onEdit { it.setTakeover(button, checked) } },
-                title = if (button == PenConfig.B1) "笔键 1" else "笔键 2",
-                summary = if (profile.takeover(button)) "使用下方动作配置"
-                    else "保持系统原生；仍可预先配置动作",
-            )
-            PenConfig.SLOTS.forEach { slot ->
-                val current = profile.action(button, slot)
-                val launchesApp = current.startsWith(PenConfig.ACTION_LAUNCH_PREFIX)
-                val launchPackage = if (launchesApp) current.removePrefix(PenConfig.ACTION_LAUNCH_PREFIX) else ""
-                val actionLabels = PenConfig.ACTION_LABELS.toList() + if (launchesApp)
-                    "启动应用：${catalog[launchPackage]?.label ?: launchPackage}" else "启动应用…"
-                val selected = if (launchesApp) PenConfig.ACTIONS.size
-                    else PenConfig.ACTIONS.indexOf(current).coerceAtLeast(0)
-                OverlayDropdownPreference(
-                    items = actionLabels,
-                    selectedIndex = selected,
-                    title = when (slot) { PenConfig.SHORT -> "单击"; PenConfig.LONG -> "长按"; else -> "双击" },
-                    summary = when (current) {
-                        PenConfig.ACTION_PAGE_UP, PenConfig.ACTION_PAGE_DOWN -> "发送翻页按键，适合浏览器和文档"
-                        PenConfig.ACTION_SWIPE_UP, PenConfig.ACTION_SWIPE_DOWN -> "模拟触摸滑动，适合短视频等应用"
-                        PenConfig.ACTION_PASSTHROUGH -> "将这次笔键操作交给当前应用"
-                        PenConfig.ACTION_NONE -> "此手势不执行额外动作"
-                        else -> null
-                    },
-                    maxHeight = 420.dp,
-                    onSelectedIndexChange = { index ->
-                        if (index == PenConfig.ACTIONS.size) onChooseLaunch(button, slot)
-                        else onEdit { it.setAction(button, slot, PenConfig.ACTIONS[index]) }
-                    },
-                )
-                if (launchesApp) ArrowPreference(
-                    title = "更换启动应用",
-                    summary = launchPackage,
-                    onClick = { onChooseLaunch(button, slot) },
-                )
-            }
-        }
-    }
-
-    @Composable
-    private fun TimingSlider(title: String, value: Long, range: ClosedFloatingPointRange<Float>, steps: Int,
-                             hint: String, onChange: (Long) -> Unit) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically) {
-            Text(title, fontSize = 16.sp, fontWeight = FontWeight.Medium)
-            Text("$value ms", color = MiuixTheme.colorScheme.primary, fontSize = 16.sp, fontWeight = FontWeight.Medium)
-        }
-        Spacer(Modifier.height(6.dp))
-        SecondaryText(hint)
-        Slider(
-            value = value.toFloat(),
-            onValueChange = { raw ->
-                val next = ((raw / 10f).roundToLong() * 10L).coerceIn(range.start.toLong(), range.endInclusive.toLong())
-                if (next != value) onChange(next)
+@Composable
+private fun PageContent(device: Boolean, appProfile: Boolean, onBack: () -> Unit, content: LazyListScope.() -> Unit) {
+    val list = rememberLazyListState()
+    val scrollBehavior = MiuixScrollBehavior(state = rememberTopAppBarState(),
+        canScroll = { list.canScrollForward || list.canScrollBackward })
+    val density = LocalDensity.current
+    val entrance = remember { Animatable(0f) }
+    val entranceOffset = with(density) { 10.dp.toPx() }
+    // 页面卸载即取消旧动效；Compose 的 MotionDurationScale 同时控制缩短或关闭动画。
+    LaunchedEffect(entrance) { entrance.animateTo(1f, tween(220, easing = FastOutSlowInEasing)) }
+    Scaffold(popupHost = {}, topBar = {
+        TopAppBar(
+            title = stringResource(if (device) R.string.device_settings else R.string.app_name),
+            subtitle = stringResource(if (device) R.string.device_subtitle else if (appProfile) R.string.profile_subtitle else R.string.main_subtitle),
+            scrollBehavior = scrollBehavior,
+            navigationIcon = {
+                if (device || appProfile) IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
+                    Icon(MiuixIcons.Back, stringResource(R.string.back))
+                }
             },
-            valueRange = range,
-            steps = steps,
-            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).semantics { contentDescription = title },
         )
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            SecondaryText("${range.start.toInt()} ms")
-            SecondaryText("${range.endInclusive.toInt()} ms")
+    }) { padding ->
+        Box(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding), contentAlignment = Alignment.TopCenter) {
+            LazyColumn(Modifier.widthIn(max = 1040.dp).fillMaxSize()
+                .graphicsLayer { alpha = entrance.value; translationY = entranceOffset * (1f - entrance.value) }
+                .nestedScroll(scrollBehavior.nestedScrollConnection), state = list,
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp), content = content)
         }
     }
+}
 
-    @Composable
-    private fun InfoCard(title: String, detail: String, status: String? = null) {
-        Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(20.dp),
-            colors = CardDefaults.defaultColors(color = MiuixTheme.colorScheme.primary.copy(alpha = 0.09f))) {
-            Text(title, fontSize = 21.sp, fontWeight = FontWeight.SemiBold)
+@Composable
+private fun ProfileEditor(config: PenConfig, appProfile: Boolean, apps: Map<String, AppEntry>,
+                          onEdit: ((PenConfig) -> Unit) -> Unit, onLaunch: (String, String) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            if (maxWidth >= 800.dp) Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                for (button in listOf(PenConfig.B1, PenConfig.B2)) ButtonCard(Modifier.weight(1f), config, button, apps, onEdit, onLaunch)
+            } else Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                for (button in listOf(PenConfig.B1, PenConfig.B2)) ButtonCard(Modifier, config, button, apps, onEdit, onLaunch)
+            }
+        }
+        PenCard {
+            Column(Modifier.padding(18.dp)) {
+                SectionTitle(stringResource(R.string.timing))
+                Spacer(Modifier.height(6.dp))
+                SecondaryText(stringResource(if (appProfile) R.string.timing_profile else R.string.timing_default))
+                Spacer(Modifier.height(20.dp))
+                TimingRow(stringResource(R.string.long_threshold), config.longPressMs.toInt(), 200..1500, stringResource(R.string.long_hint)) {
+                    onEdit { profile -> profile.longPressMs = it.toLong() }
+                }
+                Spacer(Modifier.height(20.dp))
+                TimingRow(stringResource(R.string.double_window), config.doubleWindowMs.toInt(), 150..800, stringResource(R.string.double_hint)) {
+                    onEdit { profile -> profile.doubleWindowMs = it.toLong() }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ButtonCard(modifier: Modifier, config: PenConfig, button: String, apps: Map<String, AppEntry>,
+                       onEdit: ((PenConfig) -> Unit) -> Unit, onLaunch: (String, String) -> Unit) {
+    PenCard(modifier) {
+        ToggleRow(stringResource(if (button == PenConfig.B1) R.string.key_lower else R.string.key_upper), config.takeover(button),
+            stringResource(if (config.takeover(button)) R.string.takeover_on else R.string.takeover_off)) {
+            onEdit { profile -> profile.setTakeover(button, it) }
+        }
+        for ((slot, id) in listOf(PenConfig.SHORT to R.string.gesture_short, PenConfig.LONG to R.string.gesture_long, PenConfig.DOUBLE to R.string.gesture_double)) {
+            val action = config.action(button, slot)
+            ActionPreference(stringResource(id), action, apps, onSelect = { chosen ->
+                if (chosen == "launch") onLaunch(button, slot) else onEdit { it.setAction(button, slot, chosen) }
+            })
+            if (action.startsWith(PenConfig.ACTION_LAUNCH_PREFIX)) Preference(stringResource(R.string.change_target),
+                action.removePrefix(PenConfig.ACTION_LAUNCH_PREFIX), arrow = true, onClick = { onLaunch(button, slot) })
+        }
+    }
+}
+
+@Composable
+private fun ActionPreference(title: String, action: String, apps: Map<String, AppEntry>, onSelect: (String) -> Unit) {
+    val options = PenConfig.ACTIONS.toList() + "launch"
+    val launching = action.startsWith(PenConfig.ACTION_LAUNCH_PREFIX)
+    val labels = options.map { actionLabel(if (it == "launch" && launching) action else it, apps) }
+    OverlayDropdownPreference(items = labels, selectedIndex = if (launching) options.lastIndex else options.indexOf(action).coerceAtLeast(0),
+        title = title, summary = actionSummary(action), maxHeight = 420.dp,
+        onSelectedIndexChange = { index -> options.getOrNull(index)?.let(onSelect) })
+}
+
+@Composable
+private fun PenCard(modifier: Modifier = Modifier, tint: Color? = null, content: @Composable ColumnScope.() -> Unit) {
+    Card(modifier.fillMaxWidth(), insideMargin = PaddingValues(0.dp),
+        colors = CardDefaults.defaultColors(color = tint ?: MiuixTheme.colorScheme.surfaceContainer)) {
+        Column(content = content)
+    }
+}
+
+@Composable
+private fun InfoCard(title: String, detail: String, status: String? = null) {
+    val colors = MiuixTheme.colorScheme
+    PenCard(tint = colors.primary.copy(alpha = .09f)) {
+        Column(Modifier.padding(20.dp)) {
+            Text(text = title, fontSize = 21.sp, fontWeight = FontWeight.SemiBold, color = colors.onSurface)
             Spacer(Modifier.height(8.dp))
             SecondaryText(detail)
             if (status != null) {
                 Spacer(Modifier.height(12.dp))
-                Text(status, fontSize = 13.sp, color = MiuixTheme.colorScheme.primary,
-                    modifier = Modifier.background(MiuixTheme.colorScheme.primary.copy(alpha = 0.10f),
-                        RoundedCornerShape(8.dp)).padding(horizontal = 9.dp, vertical = 5.dp))
+                Text(text = status, fontSize = 13.sp, color = colors.primary,
+                    modifier = Modifier.background(colors.primary.copy(alpha = .10f), RoundedCornerShape(8.dp)).padding(horizontal = 9.dp, vertical = 5.dp))
             }
         }
     }
+}
 
-    @Composable
-    private fun GestureGuide() {
-        Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(18.dp)) {
-            Text("动作说明", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(8.dp))
-            SecondaryText("「上滑 / 下滑」模拟触摸手势，适合抖音、小红书等应用。「上翻页 / 下翻页」发送键盘翻页按键，适合浏览器和文档。")
-            Spacer(Modifier.height(8.dp))
-            SecondaryText("接管关闭时，笔键保持系统原生。接管开启但三个手势都设为「不执行」时，此笔键也保持原生。")
+@Composable
+private fun SectionTitle(title: String) {
+    Text(text = title, modifier = Modifier.semantics { heading() }, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+}
+
+@Composable
+private fun SecondaryText(text: String) {
+    Text(text = text, fontSize = 13.sp, lineHeight = 20.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+}
+
+@Composable
+private fun TextCard(title: String, paragraphs: List<String>) {
+    PenCard {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            SectionTitle(title)
+            paragraphs.forEach { SecondaryText(it) }
         }
     }
+}
 
-    @Composable
-    private fun About() {
-        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            InfoCard("焦点笔 Plus", "首个构建版本 · 笔键重映射与按应用配置", "版本 ${BuildConfig.VERSION_NAME}")
-            Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(18.dp)) {
-                Text("使用说明", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(8.dp))
-                SecondaryText("在 LSPosed 中启用模块，并按框架提示重启。模块加载后，已保存的设置会自动同步。")
-                Spacer(Modifier.height(8.dp))
-                SecondaryText("应用配置优先于默认配置。删除应用配置后，该应用重新使用默认配置。")
-                Spacer(Modifier.height(8.dp))
-                SecondaryText("需要恢复系统原生行为时，可关闭对应笔键的接管；也可以在 LSPosed 中停用模块并重启。")
+@Composable
+private fun GestureGuide() = TextCard(stringResource(R.string.gesture_guide),
+    listOf(stringResource(R.string.gesture_guide_actions), stringResource(R.string.gesture_guide_native)))
+
+@Composable
+private fun ActionButton(title: String, primary: Boolean = false, onClick: () -> Unit) {
+    TextButton(title, onClick = onClick, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+        colors = if (primary) ButtonDefaults.textButtonColorsPrimary() else ButtonDefaults.textButtonColors())
+}
+
+@Composable
+private fun Preference(title: String, summary: String? = null, value: String? = null, enabled: Boolean = true,
+                       arrow: Boolean = false, modifier: Modifier = Modifier, onClick: (() -> Unit)? = null) {
+    val end: @Composable RowScope.() -> Unit = {
+        if (value != null) Text(value, modifier = Modifier.widthIn(max = 180.dp), fontSize = 14.sp,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary, maxLines = 2, overflow = TextOverflow.Ellipsis)
+    }
+    if (arrow) ArrowPreference(title = title, summary = summary, modifier = modifier, enabled = enabled, onClick = onClick, endActions = end)
+    else BasicComponent(title = title, summary = summary, modifier = modifier, enabled = enabled, onClick = onClick, endActions = end)
+}
+
+@Composable
+private fun ToggleRow(title: String, checked: Boolean, summary: String? = null, enabled: Boolean = true, onChange: (Boolean) -> Unit) {
+    SwitchPreference(checked = checked, onCheckedChange = onChange, title = title, summary = summary, enabled = enabled)
+}
+
+@Composable
+private fun TimingRow(title: String, value: Int, range: IntRange, hint: String, onSave: (Int) -> Unit) {
+    val colors = MiuixTheme.colorScheme
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Text(text = title, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+        Text(text = stringResource(R.string.ms, value), fontSize = 16.sp, fontWeight = FontWeight.Medium, color = colors.primary)
+    }
+    Spacer(Modifier.height(6.dp))
+    SecondaryText(hint)
+    Slider(modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).semantics { contentDescription = title }, value = value.toFloat(),
+        onValueChange = { raw ->
+            val next = ((raw / 10f).roundToInt() * 10).coerceIn(range)
+            if (next != value) onSave(next)
+        }, valueRange = range.first.toFloat()..range.last.toFloat(), steps = (range.last - range.first) / 10 - 1)
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        SecondaryText(stringResource(R.string.ms, range.first))
+        SecondaryText(stringResource(R.string.ms, range.last))
+    }
+}
+
+@Composable
+private fun AppSearch(query: String, onQuery: (String) -> Unit, placeholder: String) {
+    TextField(value = query, onValueChange = onQuery, label = placeholder, singleLine = true, modifier = Modifier.fillMaxWidth())
+}
+
+@Composable
+private fun AppRow(app: AppEntry, extra: String? = null, enabled: Boolean = true, onClick: () -> Unit) {
+    ArrowPreference(title = app.label, summary = app.pkg + if (extra == null) "" else "\n" + extra, startAction = {
+        if (app.icon != null) Image(app.icon.asImageBitmap(), null, Modifier.size(38.dp))
+        else Text(text = app.label.take(1), fontSize = 19.sp, color = MiuixTheme.colorScheme.primary,
+            modifier = Modifier.size(38.dp).background(MiuixTheme.colorScheme.primary.copy(alpha = .12f), RoundedCornerShape(10.dp)).padding(8.dp))
+    }, enabled = enabled, onClick = onClick)
+}
+
+@Composable
+private fun AppPicker(title: String, description: String, apps: List<AppEntry>, configured: Set<String>, loaded: Boolean, error: Boolean, enabled: Boolean,
+                      query: String, onQuery: (String) -> Unit, onDismiss: () -> Unit, onRetry: () -> Unit, onSelect: (AppEntry) -> Unit) {
+    val found = apps.filter { matches(it, query) }
+    val listHeight = minOf(360.dp, (found.size.coerceAtLeast(1) * 76).dp)
+    val availableHeight = (LocalConfiguration.current.screenHeightDp - 300).coerceAtLeast(120).dp
+    OverlayDialog(show = true, onDismissRequest = onDismiss, title = title, summary = description) {
+        AppSearch(query, onQuery, stringResource(R.string.search_apps))
+        Spacer(Modifier.height(12.dp))
+        LazyColumn(Modifier.fillMaxWidth().height(minOf(listHeight, availableHeight)), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            if (!loaded) item { SecondaryText(stringResource(R.string.loading_apps)) }
+            else if (error) item { SecondaryText(stringResource(R.string.apps_error)) }
+            else if (found.isEmpty()) item { SecondaryText(stringResource(if (apps.isEmpty()) R.string.no_launch_apps else R.string.no_matches)) }
+            items(found, key = { it.pkg }) { app ->
+                AppRow(app, if (app.pkg in configured) stringResource(R.string.configured) else null, enabled) { onSelect(app) }
             }
-            Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(18.dp)) {
-                Text("项目声明", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(8.dp))
-                SecondaryText("本项目由社区独立维护，与小米及其关联公司无隶属、授权或背书关系。小米及相关产品名称仅用于说明设备兼容性。")
-                Spacer(Modifier.height(8.dp))
-                SecondaryText("仅在小米 Pad 6 Pro、HyperOS 3 上测试通过。其他设备和系统版本尚未验证。")
-                Spacer(Modifier.height(8.dp))
-                SecondaryText("软件按现状提供。Root、LSPosed 与系统 Hook 的兼容性取决于设备和 ROM；使用前请备份，遇到异常可停用模块并重启。第三方组件版权和许可证保留在源码与 APK 的 third_party 目录中。")
+        }
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            TextButton(stringResource(R.string.cancel), onClick = onDismiss, modifier = Modifier.weight(1f).heightIn(min = 48.dp))
+            if (error) TextButton(stringResource(R.string.retry), onClick = onRetry, modifier = Modifier.weight(1f).heightIn(min = 48.dp))
+        }
+    }
+}
+
+@Composable
+private fun DeviceSettings(cfg: PenConfig, rom: RomProfile.Family, state: HardwareState, moduleActive: Boolean, ipeActive: Boolean, busy: Boolean,
+                           onEdit: ((PenConfig) -> Unit) -> Unit, onInstall: () -> Unit, onLsposed: () -> Unit, onSystemPage: () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        PenCard {
+            Column(Modifier.padding(18.dp)) { SectionTitle(stringResource(R.string.device_status)) }
+            Preference(stringResource(R.string.detected_system), value = stringResource(when (rom) {
+                RomProfile.Family.HYPEROS -> R.string.rom_hyperos
+                RomProfile.Family.COLOROS -> R.string.rom_coloros
+                RomProfile.Family.UNKNOWN -> R.string.rom_unknown
+            }))
+            if (rom == RomProfile.Family.COLOROS) {
+                Preference(stringResource(R.string.connected), value = stringResource(if (state.connected) R.string.connected else R.string.disconnected))
+                Preference(stringResource(R.string.battery), value = if (state.battery < 0) stringResource(R.string.unknown) else "${state.battery}%")
+                Preference(stringResource(if (!state.valid) R.string.unknown else if (state.docked) R.string.docked else R.string.undocked), summary = state.mac)
             }
-            Card(Modifier.fillMaxWidth()) {
-                ArrowPreference(title = "焦点笔 Plus 源码", summary = "BaerYiTo/XiaomiSmartPenPlus · Apache 2.0",
-                    onClick = { openUrl("https://github.com/BaerYiTo/XiaomiSmartPenPlus") })
-                ArrowPreference(title = "Miuix 开源项目", summary = "compose-miuix-ui/miuix · Apache 2.0",
-                    onClick = { openUrl("https://github.com/compose-miuix-ui/miuix") })
+        }
+        if (rom == RomProfile.Family.COLOROS) PenCard {
+            Column(Modifier.padding(18.dp)) { SectionTitle(stringResource(R.string.system_integration)) }
+            ToggleRow(stringResource(R.string.system_integration), cfg.systemIntegration, stringResource(R.string.integration_info)) { onEdit { p -> p.systemIntegration = it } }
+            ToggleRow(stringResource(R.string.dock_hint), cfg.dockHint, enabled = cfg.systemIntegration) { onEdit { p -> p.dockHint = it } }
+            ToggleRow(stringResource(R.string.lift_hint), cfg.liftHint, enabled = cfg.systemIntegration) { onEdit { p -> p.liftHint = it } }
+            ToggleRow(stringResource(R.string.wake_lift), cfg.wakeOnLift, stringResource(R.string.wake_info), cfg.systemIntegration) { onEdit { p -> p.wakeOnLift = it } }
+            ToggleRow(stringResource(R.string.wake_dock), cfg.wakeOnDock, enabled = cfg.systemIntegration) { onEdit { p -> p.wakeOnDock = it } }
+        }
+        PenCard {
+            Column(Modifier.padding(18.dp)) { SectionTitle(stringResource(R.string.setup)) }
+            Preference(stringResource(R.string.module_status), value = stringResource(if (moduleActive) R.string.active else R.string.pending))
+            if (rom == RomProfile.Family.COLOROS) {
+                Preference(stringResource(R.string.ipe_status), value = stringResource(if (ipeActive) R.string.active else R.string.pending))
+                Preference(stringResource(R.string.install_bridge), stringResource(R.string.install_info), enabled = !busy, arrow = true, onClick = onInstall)
             }
+            Preference(stringResource(R.string.open_lsposed), stringResource(lsposedInfoResource(rom)), enabled = !busy, arrow = true, onClick = onLsposed)
+            Preference(stringResource(R.string.open_system_page), arrow = true, onClick = onSystemPage)
         }
     }
+}
 
-    @Composable
-    private fun ConfirmButtons(confirm: String, enabled: Boolean = true, onCancel: () -> Unit, onConfirm: () -> Unit) {
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            TextButton("取消", onClick = onCancel, modifier = Modifier.weight(1f).heightIn(min = 48.dp))
-            TextButton(confirm, onClick = onConfirm, enabled = enabled, modifier = Modifier.weight(1f).heightIn(min = 48.dp),
-                colors = ButtonDefaults.textButtonColorsPrimary())
-        }
+private fun lsposedInfoResource(rom: RomProfile.Family): Int = when (rom) {
+    RomProfile.Family.HYPEROS -> R.string.lsposed_info_hyperos
+    RomProfile.Family.COLOROS -> R.string.lsposed_info
+    RomProfile.Family.UNKNOWN -> R.string.lsposed_info_unknown
+}
+
+private fun matches(app: AppEntry, query: String): Boolean = query.trim().let { it.isBlank() || app.label.contains(it, true) || app.pkg.contains(it, true) }
+
+private fun ownershipLabel(profile: PenConfig, button: String, context: android.content.Context): String =
+    context.getString(if (profile.owns(button)) R.string.owned else R.string.native_action)
+
+private fun replaceSettings(target: PenConfig, source: PenConfig) {
+    for (button in listOf(PenConfig.B1, PenConfig.B2)) {
+        target.setTakeover(button, source.takeover(button))
+        for (slot in PenConfig.SLOTS) target.setAction(button, slot, source.action(button, slot))
     }
+    target.longPressMs = source.longPressMs
+    target.doubleWindowMs = source.doubleWindowMs
+}
 
-    @Composable
-    private fun SecondaryText(value: String) {
-        Text(value, fontSize = 13.sp, lineHeight = 20.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+@Composable
+private fun actionLabel(action: String, apps: Map<String, AppEntry>): String {
+    val id = when (action) {
+        "none" -> R.string.none; "volume_up" -> R.string.volume_up; "volume_down" -> R.string.volume_down
+        "play_pause" -> R.string.play_pause; "back" -> R.string.action_back; "home" -> R.string.home
+        "recents" -> R.string.recents; "page_up" -> R.string.page_up; "page_down" -> R.string.page_down
+        "swipe_up" -> R.string.swipe_up; "swipe_down" -> R.string.swipe_down
+        "swipe_left" -> R.string.swipe_left; "swipe_right" -> R.string.swipe_right
+        "screenshot_partial" -> R.string.screenshot_partial; "passthrough" -> R.string.passthrough
+        else -> R.string.launch_app
     }
+    val label = stringResource(id)
+    return if (action.startsWith(PenConfig.ACTION_LAUNCH_PREFIX)) stringResource(R.string.launch_label,
+        apps[action.removePrefix(PenConfig.ACTION_LAUNCH_PREFIX)]?.label ?: action.removePrefix(PenConfig.ACTION_LAUNCH_PREFIX)) else label
+}
 
-    @Composable
-    private fun DialogHint(value: String) {
-        Text(value, modifier = Modifier.padding(vertical = 20.dp), fontSize = 14.sp,
-            color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
-    }
-
-    @Composable
-    private fun AppIcon(app: PenApp?) {
-        Box(Modifier.padding(end = 14.dp).size(38.dp), contentAlignment = Alignment.Center) {
-            if (app?.icon != null) Image(app.icon, contentDescription = null, modifier = Modifier.fillMaxSize())
-            else Text(app?.label?.take(1) ?: "应", fontSize = 19.sp, fontWeight = FontWeight.Medium,
-                color = MiuixTheme.colorScheme.primary,
-                modifier = Modifier.background(MiuixTheme.colorScheme.primary.copy(alpha = 0.10f),
-                    RoundedCornerShape(10.dp)).padding(8.dp))
-        }
-    }
-
-    private fun loadLaunchableApps(): List<PenApp> {
-        val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-        val resolved = packageManager.queryIntentActivities(intent, 0)
-        val collator = Collator.getInstance(Locale.CHINA)
-        return resolved.map { it.activityInfo.packageName }.distinct().map { loadApp(it, launchable = true) }
-            .sortedWith { first, second -> collator.compare(first.label, second.label) }
-    }
-
-    private fun loadApp(pkg: String, launchable: Boolean): PenApp {
-        return try {
-            val info = packageManager.getApplicationInfo(pkg, 0)
-            val label = packageManager.getApplicationLabel(info).toString()
-            val icon = runCatching {
-                val drawable = packageManager.getApplicationIcon(info)
-                val bitmap = Bitmap.createBitmap(72, 72, Bitmap.Config.ARGB_8888)
-                drawable.setBounds(0, 0, bitmap.width, bitmap.height)
-                drawable.draw(Canvas(bitmap))
-                bitmap.asImageBitmap()
-            }.getOrNull()
-            PenApp(pkg, label, icon, launchable)
-        } catch (_: PackageManager.NameNotFoundException) {
-            PenApp(pkg, pkg, null, false)
-        } catch (_: RuntimeException) {
-            PenApp(pkg, pkg, null, false)
-        }
-    }
-
-    private fun openUrl(url: String) {
-        runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
-            .onFailure { message = "没有可用的浏览器来打开项目页面。" }
-    }
-
-    private fun ownershipLabel(profile: PenConfig, button: String) = if (profile.owns(button)) "接管" else "原生"
-
-    private fun replaceSettings(target: PenConfig, source: PenConfig) {
-        for (button in listOf(PenConfig.B1, PenConfig.B2)) {
-            target.setTakeover(button, source.takeover(button))
-            for (slot in PenConfig.SLOTS) target.setAction(button, slot, source.action(button, slot))
-        }
-        target.longPressMs = source.longPressMs
-        target.doubleWindowMs = source.doubleWindowMs
-    }
-
-    private data class PenApp(val pkg: String, val label: String, val icon: ImageBitmap?, val launchable: Boolean)
-
-    companion object {
-        private val persistence = Executors.newSingleThreadExecutor()
-    }
+@Composable
+private fun actionSummary(action: String): String? = when (action) {
+    "none" -> stringResource(R.string.none_info)
+    "page_up", "page_down" -> stringResource(R.string.page_info)
+    "swipe_up", "swipe_down", "swipe_left", "swipe_right" -> stringResource(R.string.swipe_info)
+    "passthrough" -> stringResource(R.string.passthrough_info)
+    else -> null
 }
