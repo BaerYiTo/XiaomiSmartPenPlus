@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.2.1
+
+- Add a ColorOS-only home entry for per-app, per-button, and per-gesture tap settings.
+- Add a full-screen-ratio position preview and configurable tap interval; keep old tap profiles at 120 ms.
+- Bump versionName to 2.2.1 and versionCode to 24.
+
 ## 2.2.0
 
 - Tune only the ColorOS upward swipe for full-screen live-feed navigation; preserve the HyperOS swipe path.

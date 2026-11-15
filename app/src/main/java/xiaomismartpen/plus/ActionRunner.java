@@ -274,7 +274,7 @@ final class ActionRunner {
         float y = metrics.heightPixels * PenConfig.tapYPercent(action) / 100f;
         int count = PenConfig.tapCount(action);
         final long pressMs = 40L;
-        final long intervalMs = 120L;
+        final long intervalMs = PenConfig.tapIntervalMs(action);
         long now = SystemClock.uptimeMillis();
         long durationMs = (count - 1L) * intervalMs + pressMs;
         long firstDown = now - durationMs;

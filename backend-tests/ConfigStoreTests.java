@@ -91,19 +91,26 @@ public final class ConfigStoreTests {
         eq(PenConfig.defaults().serialize(), ConfigStore.load(new Context()).serialize(), "blank old snapshot uses native fallback");
     }
     static void tapActionProfiles() {
-        PenConfig config = active(PenConfig.tapAction(25, 75, 3));
+        PenConfig config = active(PenConfig.tapAction(25, 75, 3, 250));
         config.ensureAppConfig("com.example.video").setAction(
-                PenConfig.B2, PenConfig.DOUBLE, PenConfig.tapAction(61, 42, 5));
+                PenConfig.B2, PenConfig.DOUBLE, PenConfig.tapAction(61, 42, 5, 310));
         PenConfig restored = PenConfig.parse(config.serialize());
-        eq("tap:25:75:3", restored.action(PenConfig.B1, PenConfig.SHORT), "tap parameters survive serialization");
-        eq("tap:61:42:5", restored.appConfig("com.example.video").action(
+        eq("tap:25:75:3:250", restored.action(PenConfig.B1, PenConfig.SHORT), "tap parameters survive serialization");
+        eq("tap:61:42:5:310", restored.appConfig("com.example.video").action(
                 PenConfig.B2, PenConfig.DOUBLE), "tap parameters survive per-app serialization");
-        eq("tap:61:42:5", restored.copy().appConfig("com.example.video").action(
+        eq("tap:61:42:5:310", restored.copy().appConfig("com.example.video").action(
                 PenConfig.B2, PenConfig.DOUBLE), "tap parameters survive profile copying");
-        eq("tap:1:99:10", PenConfig.tapAction(0, 100, 11), "tap factory clamps values to supported bounds");
+        eq("tap:1:99:10:60", PenConfig.tapAction(0, 100, 11, 1), "tap factory clamps values to supported bounds");
+        eq("tap:1:1:1:1000", PenConfig.tapAction(1, 1, 1, 1001), "tap interval upper bound is clamped");
+        eq(120, PenConfig.tapIntervalMs(PenConfig.tapAction(25, 75, 3)), "default tap interval is 120 ms");
+        eq(120, PenConfig.tapIntervalMs("tap:25:75:3"), "legacy tap configuration defaults to 120 ms");
+        eq(true, PenConfig.isTapAction("tap:25:75:3"), "legacy tap configuration remains valid");
         PenConfig malformed = PenConfig.parse("b1.takeover=true\nb1.short=tap:0:50:2\n");
         eq(PenConfig.ACTION_NONE, malformed.action(PenConfig.B1, PenConfig.SHORT), "malformed tap coordinates are rejected");
-        eq("点击屏幕（25%，75%，3次）", PenConfig.labelFor("tap:25:75:3"), "configured tap label includes its parameters");
+        PenConfig malformedInterval = PenConfig.parse("b1.takeover=true\nb1.short=tap:50:50:1:59\n");
+        eq(PenConfig.ACTION_NONE, malformedInterval.action(PenConfig.B1, PenConfig.SHORT), "tap intervals below the minimum are rejected");
+        eq("点击屏幕（25%，75%，3次，间隔120毫秒）", PenConfig.labelFor("tap:25:75:3"), "legacy tap label shows the default interval");
+        eq("点击屏幕（25%，75%，3次，间隔250毫秒）", PenConfig.labelFor("tap:25:75:3:250"), "tap label includes its custom interval");
     }
     public static void main(String[] args) {
         firstImport(); existingNewConfig(); unavailableOldProvider(); tapActionProfiles();

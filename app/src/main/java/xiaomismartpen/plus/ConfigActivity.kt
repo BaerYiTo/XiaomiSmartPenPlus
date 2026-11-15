@@ -18,6 +18,8 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -26,7 +28,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
@@ -130,6 +135,7 @@ private fun PenApp() {
     var appQuery by rememberSaveable { mutableStateOf("") }
     var confirmation by remember { mutableStateOf<Confirmation?>(null) }
     var tapEditor by remember { mutableStateOf<TapEditorTarget?>(null) }
+    var tapSettingsPage by rememberSaveable { mutableStateOf(false) }
     var result by remember { mutableStateOf<Pair<String, String>?>(null) }
     var busy by remember { mutableStateOf(false) }
     val catalog = remember(apps, extraApps) { extraApps + apps.associateBy { it.pkg } }
@@ -248,22 +254,40 @@ private fun PenApp() {
     fun goBack() {
         when {
             picker != null -> picker = null
+            tapEditor != null -> tapEditor = null
+            tapSettingsPage -> tapSettingsPage = false
             devicePage -> devicePage = false
             tab == 1 && profilePkg != null -> profilePkg = null
             tab != 0 -> tab = 0
         }
     }
-    BackHandler(picker != null || devicePage || (tab == 1 && profilePkg != null) || tab != 0) { goBack() }
+    BackHandler(picker != null || tapEditor != null || tapSettingsPage || devicePage
+            || (tab == 1 && profilePkg != null) || tab != 0) { goBack() }
     val cfg = config
     // 恢复的导航状态不能在其他 ROM 重新打开 ColorOS 专属页面。
     val systemPage = devicePage && rom == RomProfile.Family.COLOROS
-    LaunchedEffect(rom) { if (rom != RomProfile.Family.COLOROS) devicePage = false }
-    val selected = profilePkg.takeIf { tab == 1 && !systemPage }
+    val tapSettingsVisible = tapSettingsPage && rom == RomProfile.Family.COLOROS
+    LaunchedEffect(rom) {
+        if (rom != RomProfile.Family.COLOROS) {
+            devicePage = false
+            tapSettingsPage = false
+            tapEditor = null
+        }
+    }
+    val selected = profilePkg.takeIf { tab == 1 && !systemPage && !tapSettingsVisible }
     val current = if (selected == null) cfg else cfg?.appConfig(selected)
-    val pageKey = if (systemPage) "device" else if (selected != null) "profile:$selected" else "tab:$tab"
+    val tapTarget = tapEditor
+    val pageKey = when {
+        systemPage -> "device"
+        tapSettingsVisible && tapTarget != null -> "tapEditor:" + (tapTarget.profilePkg ?: "default") + ":" + tapTarget.button + ":" + tapTarget.slot
+        tapSettingsVisible -> "tapSettings"
+        selected != null -> "profile:$selected"
+        else -> "tab:$tab"
+    }
 
     Box(Modifier.fillMaxSize()) {
-            PenPage(tab, systemPage, selected != null, pageKey, onTab = { tab = it; devicePage = false }, onBack = ::goBack) {
+            PenPage(tab, systemPage, selected != null, tapSettingsVisible, tapTarget != null, pageKey,
+                onTab = { tab = it; devicePage = false; tapSettingsPage = false; tapEditor = null }, onBack = ::goBack) {
                 if (cfg == null) item { InfoCard(saveStatus, s(R.string.loading_info)) }
                 else if (systemPage) {
                     item { ActionButton(s(R.string.back_default), onClick = { devicePage = false }) }
@@ -276,12 +300,71 @@ private fun PenApp() {
                             runCatching { SystemSettings.open(context) }
                                 .onFailure { result = s(R.string.failed) to (it.message ?: it.toString()) }
                         }) }
+                } else if (tapSettingsVisible && tapTarget != null) {
+                    item {
+                        TapActionEditorPage(tapTarget, onCancel = { tapEditor = null }, onSave = { x, y, count, interval ->
+                            edit(tapTarget.profilePkg) {
+                                it.setAction(tapTarget.button, tapTarget.slot,
+                                    PenConfig.tapAction(x, y, count, interval))
+                            }
+                            tapEditor = null
+                        })
+                    }
+                } else if (tapSettingsVisible) {
+                    item { InfoCard(s(R.string.tap_settings_title), s(R.string.tap_settings_info)) }
+                    val profiles = buildList {
+                        add(null to cfg)
+                        cfg.appPackages().forEach { pkg ->
+                            cfg.appConfig(pkg)?.let { add(pkg to it) }
+                        }
+                    }
+                    var foundTapAction = false
+                    profiles.forEach { (pkg, profile) ->
+                        val mappings = buildList {
+                            for (button in listOf(PenConfig.B1, PenConfig.B2)) {
+                                for (slot in PenConfig.SLOTS) {
+                                    val action = profile.action(button, slot)
+                                    if (PenConfig.isTapAction(action)) add(Triple(button, slot, action))
+                                }
+                            }
+                        }
+                        if (mappings.isNotEmpty()) {
+                            foundTapAction = true
+                            item(key = "tap-profile:" + (pkg ?: "default")) {
+                                PenCard {
+                                    Column(Modifier.padding(18.dp)) {
+                                        SectionTitle(pkg?.let { catalog[it]?.label ?: it } ?: s(R.string.tab_default))
+                                    }
+                                    mappings.forEach { (button, slot, action) ->
+                                        val gesture = s(when (slot) {
+                                            PenConfig.SHORT -> R.string.gesture_short
+                                            PenConfig.LONG -> R.string.gesture_long
+                                            else -> R.string.gesture_double
+                                        })
+                                        Preference(
+                                            title = resources.getString(R.string.tap_mapping_title,
+                                                s(if (button == PenConfig.B1) R.string.key_lower else R.string.key_upper), gesture),
+                                            summary = resources.getString(R.string.tap_summary, PenConfig.tapXPercent(action),
+                                                PenConfig.tapYPercent(action), PenConfig.tapCount(action),
+                                                PenConfig.tapIntervalMs(action)),
+                                            arrow = true,
+                                            onClick = { tapEditor = TapEditorTarget(pkg, button, slot, action) },
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (!foundTapAction) item { InfoCard(s(R.string.tap_settings_empty), s(R.string.tap_settings_empty_info)) }
                 } else when (tab) {
                     0 -> {
                         item { InfoCard(s(R.string.tab_default), s(R.string.default_info), saveStatus) }
                         item { ProfileEditor(cfg, false, catalog, rom, { change -> edit(null, change) },
-                            { button, slot -> chooseApp("launch", null, button, slot) },
-                            { button, slot, action -> tapEditor = TapEditorTarget(null, button, slot, action) }) }
+                            { button, slot -> chooseApp("launch", null, button, slot) }) }
+                        if (rom == RomProfile.Family.COLOROS) item { PenCard {
+                            Preference(s(R.string.tap_settings_title), s(R.string.tap_settings_home_info),
+                                arrow = true, onClick = { tapSettingsPage = true })
+                        } }
                         item { ActionButton(s(R.string.reset_default), onClick = {
                             confirmation = Confirmation(s(R.string.reset_default), s(R.string.reset_confirm)) {
                                 edit(null) { replaceSettings(it, PenConfig.defaults()) }
@@ -297,8 +380,7 @@ private fun PenApp() {
                         item { ActionButton(s(R.string.back_apps), onClick = { profilePkg = null }) }
                         item { InfoCard(catalog[selected]?.label ?: selected, selected + "\n" + s(R.string.app_info), saveStatus) }
                         item { ProfileEditor(current, true, catalog, rom, { change -> edit(selected, change) },
-                            { button, slot -> chooseApp("launch", selected, button, slot) },
-                            { button, slot, action -> tapEditor = TapEditorTarget(selected, button, slot, action) }) }
+                            { button, slot -> chooseApp("launch", selected, button, slot) }) }
                         item {
                             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                 ActionButton(s(R.string.copy_default), onClick = {
@@ -371,12 +453,6 @@ private fun PenApp() {
                 } else edit(pickerProfile) { it.setAction(pickerButton, pickerSlot, PenConfig.ACTION_LAUNCH_PREFIX + app.pkg) }
                 picker = null
             })
-        tapEditor?.let { target ->
-            TapActionDialog(target, onDismiss = { tapEditor = null }, onSave = { x, y, count ->
-                edit(target.profilePkg) { it.setAction(target.button, target.slot, PenConfig.tapAction(x, y, count)) }
-                tapEditor = null
-            })
-        }
     }
     OverlayDialog(show = confirmation != null, onDismissRequest = { confirmation = null },
         title = confirmation?.title, summary = confirmation?.body) {
@@ -400,8 +476,9 @@ private fun PenApp() {
 }
 
 @Composable
-private fun PenPage(tab: Int, device: Boolean, appProfile: Boolean, pageKey: String, onTab: (Int) -> Unit,
-                    onBack: () -> Unit, content: LazyListScope.() -> Unit) {
+private fun PenPage(tab: Int, device: Boolean, appProfile: Boolean, tapSettings: Boolean, tapEditing: Boolean,
+                    pageKey: String, onTab: (Int) -> Unit, onBack: () -> Unit,
+                    content: LazyListScope.() -> Unit) {
     val pages = rememberSaveableStateHolder()
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val expandedRail = maxWidth >= 1000.dp
@@ -415,7 +492,7 @@ private fun PenPage(tab: Int, device: Boolean, appProfile: Boolean, pageKey: Str
             }
             Box(Modifier.weight(1f).fillMaxHeight()) {
                 pages.SaveableStateProvider(pageKey) {
-                    PageContent(device, appProfile, onBack, content)
+                    PageContent(device, appProfile, tapSettings, tapEditing, onBack, content)
                 }
             }
         }
@@ -423,7 +500,8 @@ private fun PenPage(tab: Int, device: Boolean, appProfile: Boolean, pageKey: Str
 }
 
 @Composable
-private fun PageContent(device: Boolean, appProfile: Boolean, onBack: () -> Unit, content: LazyListScope.() -> Unit) {
+private fun PageContent(device: Boolean, appProfile: Boolean, tapSettings: Boolean, tapEditing: Boolean,
+                        onBack: () -> Unit, content: LazyListScope.() -> Unit) {
     val list = rememberLazyListState()
     val scrollBehavior = MiuixScrollBehavior(state = rememberTopAppBarState(),
         canScroll = { list.canScrollForward || list.canScrollBackward })
@@ -434,11 +512,21 @@ private fun PageContent(device: Boolean, appProfile: Boolean, onBack: () -> Unit
     LaunchedEffect(entrance) { entrance.animateTo(1f, tween(220, easing = FastOutSlowInEasing)) }
     Scaffold(popupHost = {}, topBar = {
         TopAppBar(
-            title = stringResource(if (device) R.string.device_settings else R.string.app_name),
-            subtitle = stringResource(if (device) R.string.device_subtitle else if (appProfile) R.string.profile_subtitle else R.string.main_subtitle),
+            title = stringResource(when {
+                device -> R.string.device_settings
+                tapEditing -> R.string.tap_editor_title
+                tapSettings -> R.string.tap_settings_title
+                else -> R.string.app_name
+            }),
+            subtitle = stringResource(when {
+                device -> R.string.device_subtitle
+                tapSettings -> R.string.tap_settings_subtitle
+                appProfile -> R.string.profile_subtitle
+                else -> R.string.main_subtitle
+            }),
             scrollBehavior = scrollBehavior,
             navigationIcon = {
-                if (device || appProfile) IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
+                if (device || appProfile || tapSettings) IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
                     Icon(MiuixIcons.Back, stringResource(R.string.back))
                 }
             },
@@ -456,14 +544,13 @@ private fun PageContent(device: Boolean, appProfile: Boolean, onBack: () -> Unit
 
 @Composable
 private fun ProfileEditor(config: PenConfig, appProfile: Boolean, apps: Map<String, AppEntry>, rom: RomProfile.Family,
-                          onEdit: ((PenConfig) -> Unit) -> Unit, onLaunch: (String, String) -> Unit,
-                          onTap: (String, String, String) -> Unit) {
+                          onEdit: ((PenConfig) -> Unit) -> Unit, onLaunch: (String, String) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         BoxWithConstraints(Modifier.fillMaxWidth()) {
             if (maxWidth >= 800.dp) Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                for (button in listOf(PenConfig.B1, PenConfig.B2)) ButtonCard(Modifier.weight(1f), config, button, apps, rom, onEdit, onLaunch, onTap)
+                for (button in listOf(PenConfig.B1, PenConfig.B2)) ButtonCard(Modifier.weight(1f), config, button, apps, rom, onEdit, onLaunch)
             } else Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                for (button in listOf(PenConfig.B1, PenConfig.B2)) ButtonCard(Modifier, config, button, apps, rom, onEdit, onLaunch, onTap)
+                for (button in listOf(PenConfig.B1, PenConfig.B2)) ButtonCard(Modifier, config, button, apps, rom, onEdit, onLaunch)
             }
         }
         PenCard {
@@ -487,7 +574,7 @@ private fun ProfileEditor(config: PenConfig, appProfile: Boolean, apps: Map<Stri
 @Composable
 private fun ButtonCard(modifier: Modifier, config: PenConfig, button: String, apps: Map<String, AppEntry>,
                        rom: RomProfile.Family, onEdit: ((PenConfig) -> Unit) -> Unit,
-                       onLaunch: (String, String) -> Unit, onTap: (String, String, String) -> Unit) {
+                       onLaunch: (String, String) -> Unit) {
     PenCard(modifier) {
         ToggleRow(stringResource(if (button == PenConfig.B1) R.string.key_lower else R.string.key_upper), config.takeover(button),
             stringResource(if (config.takeover(button)) R.string.takeover_on else R.string.takeover_off)) {
@@ -498,7 +585,9 @@ private fun ButtonCard(modifier: Modifier, config: PenConfig, button: String, ap
             ActionPreference(stringResource(id), action, apps, rom, onSelect = { chosen ->
                 when (chosen) {
                     "launch" -> onLaunch(button, slot)
-                    PenConfig.ACTION_TAP -> onTap(button, slot, action)
+                    PenConfig.ACTION_TAP -> onEdit {
+                        it.setAction(button, slot, PenConfig.tapAction(50, 50, 1))
+                    }
                     else -> onEdit { it.setAction(button, slot, chosen) }
                 }
             })
@@ -617,27 +706,77 @@ private fun TimingRow(title: String, value: Int, range: IntRange, hint: String, 
 }
 
 @Composable
-private fun TapActionDialog(target: TapEditorTarget, onDismiss: () -> Unit,
-                           onSave: (Int, Int, Int) -> Unit) {
+private fun TapActionEditorPage(target: TapEditorTarget, onCancel: () -> Unit,
+                                onSave: (Int, Int, Int, Int) -> Unit) {
     var x by remember(target) { mutableIntStateOf(PenConfig.tapXPercent(target.action)) }
     var y by remember(target) { mutableIntStateOf(PenConfig.tapYPercent(target.action)) }
     var count by remember(target) { mutableIntStateOf(PenConfig.tapCount(target.action)) }
-    OverlayDialog(show = true, onDismissRequest = onDismiss, title = stringResource(R.string.tap_dialog_title),
-        summary = stringResource(R.string.tap_dialog_info)) {
-        TapSettingRow(stringResource(R.string.tap_x), x, 1..99, 97,
-            stringResource(R.string.tap_percent, x), stringResource(R.string.tap_x_info)) { x = it }
-        Spacer(Modifier.height(14.dp))
-        TapSettingRow(stringResource(R.string.tap_y), y, 1..99, 97,
-            stringResource(R.string.tap_percent, y), stringResource(R.string.tap_y_info)) { y = it }
-        Spacer(Modifier.height(14.dp))
-        TapSettingRow(stringResource(R.string.tap_count), count, 1..10, 8,
-            stringResource(R.string.tap_count_value, count), stringResource(R.string.tap_count_info)) { count = it }
-        Spacer(Modifier.height(16.dp))
+    var interval by remember(target) { mutableIntStateOf(PenConfig.tapIntervalMs(target.action)) }
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        PenCard {
+            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                SectionTitle(stringResource(R.string.tap_preview_title))
+                SecondaryText(stringResource(R.string.tap_preview_info))
+                TapPositionPreview(x, y, stringResource(R.string.tap_preview_accessibility)) { nextX, nextY ->
+                    x = nextX
+                    y = nextY
+                }
+                TapSettingRow(stringResource(R.string.tap_x), x, 1..99, 97,
+                    stringResource(R.string.tap_percent, x), stringResource(R.string.tap_x_info)) { x = it }
+                TapSettingRow(stringResource(R.string.tap_y), y, 1..99, 97,
+                    stringResource(R.string.tap_percent, y), stringResource(R.string.tap_y_info)) { y = it }
+            }
+        }
+        PenCard {
+            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                SectionTitle(stringResource(R.string.tap_repeat_settings))
+                TapSettingRow(stringResource(R.string.tap_count), count, 1..10, 8,
+                    stringResource(R.string.tap_count_value, count), stringResource(R.string.tap_count_info)) { count = it }
+                TapSettingRow(stringResource(R.string.tap_interval), interval, 60..1000, 93,
+                    stringResource(R.string.tap_interval_value, interval), stringResource(R.string.tap_interval_info)) { interval = it }
+            }
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            TextButton(stringResource(R.string.cancel), onClick = onDismiss,
+            TextButton(stringResource(R.string.cancel), onClick = onCancel,
                 modifier = Modifier.weight(1f).heightIn(min = 48.dp))
-            TextButton(stringResource(R.string.confirm), onClick = { onSave(x, y, count) },
+            TextButton(stringResource(R.string.confirm), onClick = { onSave(x, y, count, interval) },
                 modifier = Modifier.weight(1f).heightIn(min = 48.dp), colors = ButtonDefaults.textButtonColorsPrimary())
+        }
+    }
+}
+
+@Composable
+private fun TapPositionPreview(x: Int, y: Int, accessibilityLabel: String,
+                               onPositionChange: (Int, Int) -> Unit) {
+    val colors = MiuixTheme.colorScheme
+    val metrics = android.content.res.Resources.getSystem().displayMetrics
+    val aspect = (metrics.widthPixels.toFloat() / metrics.heightPixels.coerceAtLeast(1))
+        .coerceAtLeast(.1f)
+    val shape = RoundedCornerShape(14.dp)
+    BoxWithConstraints(
+        Modifier.fillMaxWidth()
+            .aspectRatio(aspect)
+            .clip(shape)
+            .background(colors.surfaceContainer)
+            .border(1.dp, colors.primary.copy(alpha = .24f), shape)
+            .pointerInput(Unit) {
+                detectTapGestures { offset ->
+                    val nextX = (offset.x * 100f / size.width).roundToInt().coerceIn(1, 99)
+                    val nextY = (offset.y * 100f / size.height).roundToInt().coerceIn(1, 99)
+                    onPositionChange(nextX, nextY)
+                }
+            }
+            .semantics { contentDescription = accessibilityLabel }
+    ) {
+        Text(stringResource(R.string.tap_preview_label), modifier = Modifier.align(Alignment.TopCenter).padding(12.dp),
+            fontSize = 13.sp, color = colors.onSurface.copy(alpha = .65f))
+        Box(
+            Modifier.offset(x = maxWidth * (x / 100f) - 12.dp, y = maxHeight * (y / 100f) - 12.dp)
+                .size(24.dp)
+                .background(colors.primary.copy(alpha = .18f), CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(Modifier.size(12.dp).background(colors.primary, CircleShape))
         }
     }
 }
@@ -774,7 +913,7 @@ private fun actionLabel(action: String, apps: Map<String, AppEntry>): String {
 @Composable
 private fun actionSummary(action: String): String? = when {
     PenConfig.isTapAction(action) -> stringResource(R.string.tap_summary, PenConfig.tapXPercent(action),
-        PenConfig.tapYPercent(action), PenConfig.tapCount(action))
+        PenConfig.tapYPercent(action), PenConfig.tapCount(action), PenConfig.tapIntervalMs(action))
     action == PenConfig.ACTION_TAP -> stringResource(R.string.tap_info)
     action == "none" -> stringResource(R.string.none_info)
     action == "page_up" || action == "page_down" -> stringResource(R.string.page_info)

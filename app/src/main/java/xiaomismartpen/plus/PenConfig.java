@@ -44,9 +44,12 @@ final class PenConfig {
     /** Horizontal variants for readers that turn pages with a drag. */
     static final String ACTION_SWIPE_LEFT = "swipe_left";
     static final String ACTION_SWIPE_RIGHT = "swipe_right";
-    /** ColorOS-only configurable screen tap encoded as tap:<x-percent>:<y-percent>:<count>. */
+    /** ColorOS-only configurable screen tap encoded as tap:<x-percent>:<y-percent>:<count>:<interval-ms>. */
     static final String ACTION_TAP = "tap";
     static final String ACTION_TAP_PREFIX = "tap:";
+    static final int TAP_INTERVAL_DEFAULT_MS = 120;
+    static final int TAP_INTERVAL_MIN_MS = 60;
+    static final int TAP_INTERVAL_MAX_MS = 1000;
     static final String ACTION_SCREENSHOT = "screenshot_partial";
     /** Hand the untouched pen key to the foreground app, for apps that map it themselves. */
     static final String ACTION_PASSTHROUGH = "passthrough";
@@ -321,7 +324,7 @@ final class PenConfig {
         if (action == null) return ACTION_LABELS[0];
         if (isTapAction(action)) {
             return "点击屏幕（" + tapXPercent(action) + "%，" + tapYPercent(action)
-                    + "%，" + tapCount(action) + "次）";
+                    + "%，" + tapCount(action) + "次，间隔" + tapIntervalMs(action) + "毫秒）";
         }
         if (action.startsWith(ACTION_LAUNCH_PREFIX)) {
             return DEFAULT_APP_ACTION_LABEL + "：" + action.substring(ACTION_LAUNCH_PREFIX.length());
@@ -351,19 +354,26 @@ final class PenConfig {
     }
 
     static String tapAction(int xPercent, int yPercent, int count) {
+        return tapAction(xPercent, yPercent, count, TAP_INTERVAL_DEFAULT_MS);
+    }
+
+    static String tapAction(int xPercent, int yPercent, int count, int intervalMs) {
         return ACTION_TAP_PREFIX + clamp(xPercent, 1, 99) + ":" + clamp(yPercent, 1, 99)
-                + ":" + clamp(count, 1, 10);
+                + ":" + clamp(count, 1, 10) + ":"
+                + clamp(intervalMs, TAP_INTERVAL_MIN_MS, TAP_INTERVAL_MAX_MS);
     }
 
     static boolean isTapAction(String action) {
         if (action == null || !action.startsWith(ACTION_TAP_PREFIX)) return false;
         String[] parts = action.substring(ACTION_TAP_PREFIX.length()).split(":", -1);
-        if (parts.length != 3) return false;
+        if (parts.length != 3 && parts.length != 4) return false;
         try {
             int x = Integer.parseInt(parts[0]);
             int y = Integer.parseInt(parts[1]);
             int count = Integer.parseInt(parts[2]);
-            return x >= 1 && x <= 99 && y >= 1 && y <= 99 && count >= 1 && count <= 10;
+            int interval = parts.length == 4 ? Integer.parseInt(parts[3]) : TAP_INTERVAL_DEFAULT_MS;
+            return x >= 1 && x <= 99 && y >= 1 && y <= 99 && count >= 1 && count <= 10
+                    && interval >= TAP_INTERVAL_MIN_MS && interval <= TAP_INTERVAL_MAX_MS;
         } catch (NumberFormatException ignored) {
             return false;
         }
@@ -372,6 +382,11 @@ final class PenConfig {
     static int tapXPercent(String action) { return tapValue(action, 0, 50); }
     static int tapYPercent(String action) { return tapValue(action, 1, 50); }
     static int tapCount(String action) { return tapValue(action, 2, 1); }
+    static int tapIntervalMs(String action) {
+        if (!isTapAction(action)) return TAP_INTERVAL_DEFAULT_MS;
+        String[] parts = action.substring(ACTION_TAP_PREFIX.length()).split(":", -1);
+        return parts.length == 4 ? Integer.parseInt(parts[3]) : TAP_INTERVAL_DEFAULT_MS;
+    }
 
     private static int tapValue(String action, int index, int fallback) {
         if (!isTapAction(action)) return fallback;

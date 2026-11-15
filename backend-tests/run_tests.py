@@ -224,6 +224,15 @@ eq(29720L+tap*120L,event.getDownTime(),"each tap has its own down time");
 eq(29720L+tap*120L+(index%2==0?0:40),event.getEventTime(),"tap events use realistic press timing");
 eq(InputDevice.SOURCE_TOUCHSCREEN,event.getSource(),"tap uses touchscreen source");eq(1,event.recycleCount,"sender recycles each tap event once");
 }
+android.hardware.input.InputManager.sent.clear();
+ActionRunner.run(context,PenConfig.tapAction(25,75,3,250),0);
+events=android.hardware.input.InputManager.sent;
+eq(6,events.size(),"custom interval retains one DOWN/UP pair per repeat");
+for(int index=0;index<events.size();index++){
+MotionEvent event=(MotionEvent)events.get(index);int tap=index/2;
+eq(29460L+tap*250L,event.getDownTime(),"custom interval spaces each tap down time");
+eq(29460L+tap*250L+(index%2==0?0:40),event.getEventTime(),"custom interval preserves press duration");
+}
 }
 static final class NativeProbe {final List<Object[]> calls=new ArrayList<>();Object result=0;boolean throwFailure;
 public Object injectInputEvent(InputEvent event,boolean intoUid,int uid,int mode,int timeout,int flags){if(throwFailure)throw new IllegalStateException("native failure");calls.add(new Object[]{event,intoUid,uid,mode,timeout,flags});return result;}}
