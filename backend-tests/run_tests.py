@@ -194,21 +194,39 @@ float[][] endpoints={{2160f,900f,720f,900f},{720f,900f,2160f,900f},
 colorUp?new float[]{1440f,1656f,1440f,144f}:new float[]{1440f,1296f,1440f,504f},
 {1440f,504f,1440f,1296f}};
 for(int direction=0;direction<actions.length;direction++){
-android.hardware.input.InputManager.sent.clear();android.os.Handler.now=20000;ActionRunner.run(context,actions[direction],0);
-List<InputEvent> events=android.hardware.input.InputManager.sent;boolean extended=colorUp&&direction==2;int steps=extended?16:8;long duration=extended?320L:160L;
-eq(steps+2,events.size(),actions[direction]+" emits complete touch sequence");
+android.os.Handler.reset();android.hardware.input.InputManager.sent.clear();android.hardware.input.InputManager.sentAt.clear();android.os.Handler.now=20000;ActionRunner.run(context,actions[direction],0);
+boolean extended=colorUp&&direction==2;int steps=extended?16:8;long duration=extended?320L:160L;
+if(extended){
+eq(0,android.hardware.input.InputManager.sent.size(),"ColorOS swipe is not emitted as one burst");android.os.Handler.advance(0);
+eq(1,android.hardware.input.InputManager.sent.size(),"ColorOS swipe sends DOWN first");
+for(int step=1;step<steps;step++){android.os.Handler.advance(duration/steps);eq(step+1,android.hardware.input.InputManager.sent.size(),"ColorOS MOVE is emitted at each frame interval");}
+android.os.Handler.advance(duration/steps);
+} else eq(steps+2,android.hardware.input.InputManager.sent.size(),actions[direction]+" emits complete touch sequence");
+List<InputEvent> events=android.hardware.input.InputManager.sent;
+eq(extended?steps+1:steps+2,events.size(),actions[direction]+" emits complete touch sequence");
 MotionEvent first=(MotionEvent)events.get(0),last=(MotionEvent)events.get(events.size()-1);float[] p=endpoints[direction];
 eq(MotionEvent.ACTION_DOWN,first.getAction(),"swipe starts with DOWN");eq(MotionEvent.ACTION_UP,last.getAction(),"swipe ends with UP");
 eq(p[0],first.getX(),"swipe start x");eq(p[1],first.getY(),"swipe start y");eq(p[2],last.getX(),"swipe end x");eq(p[3],last.getY(),"swipe end y");
-eq(duration,last.getEventTime()-first.getEventTime(),"swipe duration");eq(20000L,last.getEventTime(),"swipe ends at current uptime");
+eq(duration,last.getEventTime()-first.getEventTime(),"swipe duration");eq(extended?20000L+duration:20000L,last.getEventTime(),"swipe ends at current uptime");
 for(int index=0;index<events.size();index++){MotionEvent event=(MotionEvent)events.get(index);
-eq(20000L-duration,event.getDownTime(),"all touch events retain common DOWN time");eq(InputDevice.SOURCE_TOUCHSCREEN,event.getSource(),"swipe uses touch source");eq(1,event.recycleCount,"sender recycles touch event exactly once");
+eq(extended?20000L:20000L-duration,event.getDownTime(),"all touch events retain common DOWN time");if(extended)eq(event.getEventTime(),android.hardware.input.InputManager.sentAt.get(index),"ColorOS swipe event is emitted at its timestamp");eq(InputDevice.SOURCE_TOUCHSCREEN,event.getSource(),"swipe uses touch source");eq(1,event.recycleCount,"sender recycles touch event exactly once");
 if(index>0){MotionEvent previous=(MotionEvent)events.get(index-1);eq(true,event.getEventTime()>=previous.getEventTime(),"touch timestamps are monotonic");
 eq(true,p[2]>=p[0]?event.getX()>=previous.getX():event.getX()<=previous.getX(),"x moves toward requested side");
 eq(true,p[3]>=p[1]?event.getY()>=previous.getY():event.getY()<=previous.getY(),"y moves toward requested side");}
 if(index>0&&index<events.size()-1)eq(MotionEvent.ACTION_MOVE,event.getAction(),"intermediate event is MOVE");
 }
+eq(0,android.os.Handler.pendingCount(),"swipe has no pending frames after completion");
 }
+if(colorUp)swipeQueueTests(context);
+}
+static void swipeQueueTests(Context context) {
+android.os.Handler.reset();android.os.Handler.now=30000;android.hardware.input.InputManager.sent.clear();android.hardware.input.InputManager.sentAt.clear();
+ActionRunner.run(context,PenConfig.ACTION_SWIPE_UP,0);ActionRunner.run(context,PenConfig.ACTION_SWIPE_UP,0);android.os.Handler.advance(0);
+eq(1,android.hardware.input.InputManager.sent.size(),"queued ColorOS swipes do not interleave");
+android.os.Handler.advance(320);eq(17,android.hardware.input.InputManager.sent.size(),"first queued swipe completes before the next begins");
+android.os.Handler.advance(1);eq(18,android.hardware.input.InputManager.sent.size(),"second queued swipe starts after release");
+android.os.Handler.advance(320);eq(34,android.hardware.input.InputManager.sent.size(),"second queued swipe completes");
+eq(0,android.os.Handler.pendingCount(),"queued swipes drain completely");
 }
 static void tapTests(Context context,String family) {
 Handler.reset();Handler.now=30000;clearTapEvents();

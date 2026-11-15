@@ -29,6 +29,7 @@ final class ActionRunner {
     private static volatile Object nativeInput;
     private static final Handler RESET_HANDLER = new Handler(Looper.getMainLooper());
     private static final ArrayDeque<TapSequence> TAP_QUEUE = new ArrayDeque<>();
+    private static final ArrayDeque<SwipeSequence> SWIPE_QUEUE = new ArrayDeque<>();
     private static final int POLICY_FLAG_FILTERED = 0x04000000;
     private static final int POLICY_FLAG_PASS_TO_USER = 0x40000000;
 
@@ -232,12 +233,18 @@ final class ActionRunner {
         injectSwipe(context, x, from, x, to);
     }
 
-    /** A longer ColorOS drag crosses full-screen live cards with a single pen-key action. */
+    /** Deliver ColorOS feed swipes over real frame intervals so touch handlers see the drag. */
     private static void swipeUpColorOS(Context context) {
+        InputManager input = (InputManager) context.getSystemService(Context.INPUT_SERVICE);
+        if (input == null) return;
         DisplayMetrics metrics = Resources.getSystem().getDisplayMetrics();
         float x = metrics.widthPixels * 0.5f;
-        injectSwipe(context, x, metrics.heightPixels * 0.92f, x, metrics.heightPixels * 0.08f,
-                320L, 16);
+        SwipeSequence sequence = new SwipeSequence(input, x, metrics.heightPixels * 0.92f,
+                x, metrics.heightPixels * 0.08f, 320L, 16);
+        RESET_HANDLER.post(() -> {
+            SWIPE_QUEUE.addLast(sequence);
+            if (SWIPE_QUEUE.peekFirst() == sequence) sequence.sendDown();
+        });
     }
 
     private static void swipeHorizontally(Context context, boolean leftward) {
@@ -349,6 +356,79 @@ final class ActionRunner {
         private void finish() {
             TAP_QUEUE.remove(this);
             TapSequence next = TAP_QUEUE.peekFirst();
+            if (next != null) RESET_HANDLER.postDelayed(next::sendDown, 1L);
+        }
+    }
+
+    private static final class SwipeSequence {
+        private final InputManager input;
+        private final float x0, y0, x1, y1;
+        private final long durationMs;
+        private final int steps;
+        private int step;
+        private long downTime;
+        private boolean downSent;
+
+        SwipeSequence(InputManager input, float x0, float y0, float x1, float y1,
+                      long durationMs, int steps) {
+            this.input = input;
+            this.x0 = x0;
+            this.y0 = y0;
+            this.x1 = x1;
+            this.y1 = y1;
+            this.durationMs = durationMs;
+            this.steps = steps;
+        }
+
+        void sendDown() {
+            try {
+                downTime = SystemClock.uptimeMillis();
+                send(input, motion(downTime, downTime, MotionEvent.ACTION_DOWN, x0, y0));
+                downSent = true;
+                RESET_HANDLER.postDelayed(this::sendNext,
+                        Math.max(1L, durationMs / steps));
+            } catch (Throwable failure) {
+                fail(failure);
+            }
+        }
+
+        private void sendNext() {
+            try {
+                long eventTime = SystemClock.uptimeMillis();
+                if (++step == steps) {
+                    send(input, motion(downTime, eventTime, MotionEvent.ACTION_UP, x1, y1));
+                    downSent = false;
+                    Log.i(TAG, "FPL|swipe|coloros complete elapsed=" + (eventTime - downTime));
+                    finish();
+                    return;
+                }
+                float progress = (float) step / steps;
+                send(input, motion(downTime, eventTime, MotionEvent.ACTION_MOVE,
+                        x0 + (x1 - x0) * progress, y0 + (y1 - y0) * progress));
+                RESET_HANDLER.postDelayed(this::sendNext,
+                        Math.max(1L, durationMs / steps));
+            } catch (Throwable failure) {
+                fail(failure);
+            }
+        }
+
+        private void fail(Throwable failure) {
+            if (downSent) {
+                try {
+                    long eventTime = SystemClock.uptimeMillis();
+                    send(input, motion(downTime, eventTime, MotionEvent.ACTION_UP, x1, y1));
+                } catch (Throwable releaseFailure) {
+                    failure.addSuppressed(releaseFailure);
+                }
+                downSent = false;
+            }
+            Log.w(TAG, "FPL|swipe|coloros FAILED after " + step + " moves", failure);
+            finish();
+        }
+
+        private void finish() {
+            SWIPE_QUEUE.remove(this);
+            SwipeSequence next = SWIPE_QUEUE.peekFirst();
             if (next != null) RESET_HANDLER.postDelayed(next::sendDown, 1L);
         }
     }
