@@ -44,6 +44,7 @@
     <string name="swipe_down">下滑</string>
     <string name="swipe_left">左滑</string>
     <string name="swipe_right">右滑</string>
+    <string name="tap_action">点击屏幕</string>
     <string name="screenshot_partial">区域截屏</string>
     <string name="passthrough">透传给应用</string>
     <string name="none_info">接管时，此手势不执行额外动作。</string>
@@ -52,6 +53,18 @@
     <string name="nav_info">执行系统导航动作。</string>
     <string name="page_info">向当前应用发送翻页按键。</string>
     <string name="swipe_info">模拟屏幕滑动，适用于信息流和列表。</string>
+    <string name="tap_info">设置 ColorOS 上的屏幕点击位置和次数。</string>
+    <string name="tap_summary">横向 %1$d%%，纵向 %2$d%% · 点击 %3$d 次</string>
+    <string name="tap_dialog_title">设置屏幕点击</string>
+    <string name="tap_dialog_info">设置屏幕位置以及触发时连续点击的次数。</string>
+    <string name="tap_x">横向位置</string>
+    <string name="tap_y">纵向位置</string>
+    <string name="tap_x_info">从屏幕左侧开始计算。</string>
+    <string name="tap_y_info">从屏幕顶部开始计算。</string>
+    <string name="tap_count">点击次数</string>
+    <string name="tap_count_info">每次触发此动作时发送的点击次数。</string>
+    <string name="tap_percent">%1$d%%</string>
+    <string name="tap_count_value">%1$d 次</string>
     <string name="screenshot_info">打开当前系统的区域截屏选区。</string>
     <string name="passthrough_info">由前台应用处理笔键，快捷操作需在该应用内设置。三种手势均为透传时，按下和松开会立即传递。</string>
     <string name="launch_info">打开所选已安装应用。</string>

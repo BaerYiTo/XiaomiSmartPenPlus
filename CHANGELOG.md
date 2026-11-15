@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.2.0
+
+- Tune only the ColorOS upward swipe for full-screen live-feed navigation; preserve the HyperOS swipe path.
+- Add a ColorOS-only screen-tap action with configurable horizontal/vertical position and repeat count.
+- Bump versionName to `2.2.0` and versionCode to `23`.
+
 ## 2.1.0
 
 - Merge the HyperOS and ColorOS pen-key handling paths and detect the ROM family at runtime.

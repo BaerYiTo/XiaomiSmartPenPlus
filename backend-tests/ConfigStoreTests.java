@@ -90,8 +90,23 @@ public final class ConfigStoreTests {
         ContentResolver.reset(); ContentResolver.snapshot = "  \n\t ";
         eq(PenConfig.defaults().serialize(), ConfigStore.load(new Context()).serialize(), "blank old snapshot uses native fallback");
     }
+    static void tapActionProfiles() {
+        PenConfig config = active(PenConfig.tapAction(25, 75, 3));
+        config.ensureAppConfig("com.example.video").setAction(
+                PenConfig.B2, PenConfig.DOUBLE, PenConfig.tapAction(61, 42, 5));
+        PenConfig restored = PenConfig.parse(config.serialize());
+        eq("tap:25:75:3", restored.action(PenConfig.B1, PenConfig.SHORT), "tap parameters survive serialization");
+        eq("tap:61:42:5", restored.appConfig("com.example.video").action(
+                PenConfig.B2, PenConfig.DOUBLE), "tap parameters survive per-app serialization");
+        eq("tap:61:42:5", restored.copy().appConfig("com.example.video").action(
+                PenConfig.B2, PenConfig.DOUBLE), "tap parameters survive profile copying");
+        eq("tap:1:99:10", PenConfig.tapAction(0, 100, 11), "tap factory clamps values to supported bounds");
+        PenConfig malformed = PenConfig.parse("b1.takeover=true\nb1.short=tap:0:50:2\n");
+        eq(PenConfig.ACTION_NONE, malformed.action(PenConfig.B1, PenConfig.SHORT), "malformed tap coordinates are rejected");
+        eq("点击屏幕（25%，75%，3次）", PenConfig.labelFor("tap:25:75:3"), "configured tap label includes its parameters");
+    }
     public static void main(String[] args) {
-        firstImport(); existingNewConfig(); unavailableOldProvider();
+        firstImport(); existingNewConfig(); unavailableOldProvider(); tapActionProfiles();
         System.out.println("PASS " + checks + " ConfigStore migration assertions (production persistence)");
     }
 }

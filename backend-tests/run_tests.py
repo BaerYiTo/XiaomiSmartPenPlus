@@ -181,24 +181,28 @@ public Object triggerFunction(String action,String source,Bundle bundle,boolean 
 public static Object service;public static int lookups;public static Object getService(Class<?> type){lookups++;return service;}
 }''',
 'xiaomismartpen/plus/ActionRunnerSenderTests.java':r'''package xiaomismartpen.plus;
-import java.lang.reflect.*;import java.util.*;import android.view.*;import android.content.Context;import com.android.server.LocalServices;
+import java.lang.reflect.*;import java.util.*;import android.os.*;import android.view.*;import android.content.Context;import com.android.server.LocalServices;
 final class ActionRunnerSenderTests {
 static int checks;
 static void eq(Object expected,Object actual,String message){checks++;if(!Objects.equals(expected,actual))throw new AssertionError(message+": expected="+expected+" actual="+actual);}
 static void fails(Runnable task,String message){checks++;try{task.run();}catch(IllegalStateException expected){return;}throw new AssertionError(message);}
 static void clearNative() throws Exception {Field f=ActionRunner.class.getDeclaredField("nativeInput");f.setAccessible(true);f.set(null,null);}
-static void swipeTests(Context context) {
+static void swipeTests(Context context,String family) {
 String[] actions={PenConfig.ACTION_SWIPE_LEFT,PenConfig.ACTION_SWIPE_RIGHT,PenConfig.ACTION_SWIPE_UP,PenConfig.ACTION_SWIPE_DOWN};
-float[][] endpoints={{2160f,900f,720f,900f},{720f,900f,2160f,900f},{1440f,1296f,1440f,504f},{1440f,504f,1440f,1296f}};
+boolean colorUp="COLOROS".equals(family);
+float[][] endpoints={{2160f,900f,720f,900f},{720f,900f,2160f,900f},
+colorUp?new float[]{1440f,1656f,1440f,144f}:new float[]{1440f,1296f,1440f,504f},
+{1440f,504f,1440f,1296f}};
 for(int direction=0;direction<actions.length;direction++){
 android.hardware.input.InputManager.sent.clear();android.os.Handler.now=20000;ActionRunner.run(context,actions[direction],0);
-List<InputEvent> events=android.hardware.input.InputManager.sent;eq(10,events.size(),actions[direction]+" emits complete touch sequence");
+List<InputEvent> events=android.hardware.input.InputManager.sent;boolean extended=colorUp&&direction==2;int steps=extended?16:8;long duration=extended?320L:160L;
+eq(steps+2,events.size(),actions[direction]+" emits complete touch sequence");
 MotionEvent first=(MotionEvent)events.get(0),last=(MotionEvent)events.get(events.size()-1);float[] p=endpoints[direction];
 eq(MotionEvent.ACTION_DOWN,first.getAction(),"swipe starts with DOWN");eq(MotionEvent.ACTION_UP,last.getAction(),"swipe ends with UP");
 eq(p[0],first.getX(),"swipe start x");eq(p[1],first.getY(),"swipe start y");eq(p[2],last.getX(),"swipe end x");eq(p[3],last.getY(),"swipe end y");
-eq(160L,last.getEventTime()-first.getEventTime(),"swipe duration");eq(20000L,last.getEventTime(),"swipe ends at current uptime");
+eq(duration,last.getEventTime()-first.getEventTime(),"swipe duration");eq(20000L,last.getEventTime(),"swipe ends at current uptime");
 for(int index=0;index<events.size();index++){MotionEvent event=(MotionEvent)events.get(index);
-eq(19840L,event.getDownTime(),"all touch events retain common DOWN time");eq(InputDevice.SOURCE_TOUCHSCREEN,event.getSource(),"swipe uses touch source");eq(1,event.recycleCount,"sender recycles touch event exactly once");
+eq(20000L-duration,event.getDownTime(),"all touch events retain common DOWN time");eq(InputDevice.SOURCE_TOUCHSCREEN,event.getSource(),"swipe uses touch source");eq(1,event.recycleCount,"sender recycles touch event exactly once");
 if(index>0){MotionEvent previous=(MotionEvent)events.get(index-1);eq(true,event.getEventTime()>=previous.getEventTime(),"touch timestamps are monotonic");
 eq(true,p[2]>=p[0]?event.getX()>=previous.getX():event.getX()<=previous.getX(),"x moves toward requested side");
 eq(true,p[3]>=p[1]?event.getY()>=previous.getY():event.getY()<=previous.getY(),"y moves toward requested side");}
@@ -206,11 +210,29 @@ if(index>0&&index<events.size()-1)eq(MotionEvent.ACTION_MOVE,event.getAction(),"
 }
 }
 }
+static void tapTests(Context context,String family) {
+android.hardware.input.InputManager.sent.clear();android.os.Handler.now=30000;
+ActionRunner.run(context,PenConfig.tapAction(25,75,3),0);
+List<InputEvent> events=android.hardware.input.InputManager.sent;
+if(!"COLOROS".equals(family)){eq(0,events.size(),"ColorOS tap action is ignored on other ROMs");return;}
+eq(6,events.size(),"configured tap sends one DOWN/UP pair per repeat");
+for(int index=0;index<events.size();index++){
+MotionEvent event=(MotionEvent)events.get(index);int tap=index/2;
+eq(index%2==0?MotionEvent.ACTION_DOWN:MotionEvent.ACTION_UP,event.getAction(),"tap alternates DOWN and UP");
+eq(720f,event.getX(),"tap x uses configured display percentage");eq(1350f,event.getY(),"tap y uses configured display percentage");
+eq(29720L+tap*120L,event.getDownTime(),"each tap has its own down time");
+eq(29720L+tap*120L+(index%2==0?0:40),event.getEventTime(),"tap events use realistic press timing");
+eq(InputDevice.SOURCE_TOUCHSCREEN,event.getSource(),"tap uses touchscreen source");eq(1,event.recycleCount,"sender recycles each tap event once");
+}
+}
 static final class NativeProbe {final List<Object[]> calls=new ArrayList<>();Object result=0;boolean throwFailure;
 public Object injectInputEvent(InputEvent event,boolean intoUid,int uid,int mode,int timeout,int flags){if(throwFailure)throw new IllegalStateException("native failure");calls.add(new Object[]{event,intoUid,uid,mode,timeout,flags});return result;}}
 static final class ManagerProbe {final NativeProbe mNative=new NativeProbe();}
 static final class LocalProbe {final ManagerProbe this$0=new ManagerProbe();}
 public static void main(String[] args)throws Exception {
+String family=args.length==0?"UNKNOWN":args[0];SystemProperties.reset();Build.FINGERPRINT="generic/device/product:17/release-keys";Build.DISPLAY="release";Build.MANUFACTURER="Xiaomi";Build.BRAND="Xiaomi";
+if("COLOROS".equals(family))SystemProperties.values.put("ro.build.version.coloros","17");
+if("HYPEROS".equals(family))SystemProperties.values.put("ro.mi.os.version.name","OS3.0");
 ActionRunner.setSystemClassLoader(ActionRunnerSenderTests.class.getClassLoader());clearNative();LocalServices.lookups=0;
 LocalProbe local=new LocalProbe();LocalServices.service=local;Context context=new Context();
 int[] codes={189,188,93,92};int[] expectedCodes={93,92,93,92};
@@ -238,7 +260,7 @@ for(Object rejected:new Object[]{1,2,Boolean.TRUE,null}){local.this$0.mNative.re
 for(Object rejected:new Object[]{1,2,Boolean.TRUE,null}){local.this$0.mNative.result=rejected;fails(()->ActionRunner.cancelPenEvent(context,key),"native cancellation rejection must be reported");}
 local.this$0.mNative.result=0;local.this$0.mNative.throwFailure=true;fails(()->ActionRunner.forwardPenEvent(context,key),"native exception must be reported");local.this$0.mNative.throwFailure=false;
 int calls=local.this$0.mNative.calls.size();fails(()->ActionRunner.forwardPenEvent(null,key),"missing system context must be reported");fails(()->ActionRunner.cancelPenEvent(null,key),"missing cancellation context must be reported");eq(calls,local.this$0.mNative.calls.size(),"missing context never sends input");
-clearNative();LocalServices.service=null;fails(()->ActionRunner.forwardPenEvent(context,key),"missing local input service must be reported");swipeTests(context);
+clearNative();LocalServices.service=null;fails(()->ActionRunner.forwardPenEvent(context,key),"missing local input service must be reported");swipeTests(context,family);tapTests(context,family);
 System.out.println("PASS "+checks+" production sender assertions (native endpoint substituted; Android dispatch validated separately)");
 }
 }''',
@@ -249,7 +271,8 @@ for name,content in sender_stubs.items():
     p=sender_sources/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(content,encoding='utf-8')
 sender_files=[str(sender_sources/name) for name in sender_stubs]+[str(prod/'PenConfig.java'),str(prod/'PenKeyController.java'),str(prod/'ActionRunner.java'),str(prod/'ConfigStore.java'),str(prod/'RomProfile.java'),str(testroot/'ActionRoutingTests.java')]
 subprocess.run([javac,'-encoding','UTF-8','-d',str(sender_classes),*sender_files],check=True)
-subprocess.run([java,'-cp',str(sender_classes),'xiaomismartpen.plus.ActionRunnerSenderTests'],check=True)
+for family in ('COLOROS','HYPEROS','UNKNOWN'):
+    subprocess.run([java,'-cp',str(sender_classes),'xiaomismartpen.plus.ActionRunnerSenderTests',family],check=True)
 for family in ('COLOROS','HYPEROS','UNKNOWN'):
     subprocess.run([java,'-cp',str(sender_classes),'xiaomismartpen.plus.ActionRoutingTests',family],check=True)
 

@@ -44,6 +44,9 @@ final class PenConfig {
     /** Horizontal variants for readers that turn pages with a drag. */
     static final String ACTION_SWIPE_LEFT = "swipe_left";
     static final String ACTION_SWIPE_RIGHT = "swipe_right";
+    /** ColorOS-only configurable screen tap encoded as tap:<x-percent>:<y-percent>:<count>. */
+    static final String ACTION_TAP = "tap";
+    static final String ACTION_TAP_PREFIX = "tap:";
     static final String ACTION_SCREENSHOT = "screenshot_partial";
     /** Hand the untouched pen key to the foreground app, for apps that map it themselves. */
     static final String ACTION_PASSTHROUGH = "passthrough";
@@ -67,6 +70,7 @@ final class PenConfig {
             ACTION_SWIPE_DOWN,
             ACTION_SWIPE_LEFT,
             ACTION_SWIPE_RIGHT,
+            ACTION_TAP,
             ACTION_SCREENSHOT,
             ACTION_PASSTHROUGH,
     };
@@ -86,6 +90,7 @@ final class PenConfig {
             "下滑",
             "左滑",
             "右滑",
+            "点击屏幕",
             "区域截屏",
             "透传给应用",
     };
@@ -314,6 +319,10 @@ final class PenConfig {
 
     static String labelFor(String action) {
         if (action == null) return ACTION_LABELS[0];
+        if (isTapAction(action)) {
+            return "点击屏幕（" + tapXPercent(action) + "%，" + tapYPercent(action)
+                    + "%，" + tapCount(action) + "次）";
+        }
         if (action.startsWith(ACTION_LAUNCH_PREFIX)) {
             return DEFAULT_APP_ACTION_LABEL + "：" + action.substring(ACTION_LAUNCH_PREFIX.length());
         }
@@ -331,6 +340,7 @@ final class PenConfig {
     }
 
     private static boolean isKnownAction(String value) {
+        if (isTapAction(value)) return true;
         if (value.startsWith(ACTION_LAUNCH_PREFIX)) {
             return validPackage(value.substring(ACTION_LAUNCH_PREFIX.length()));
         }
@@ -338,6 +348,34 @@ final class PenConfig {
             if (action.equals(value)) return true;
         }
         return false;
+    }
+
+    static String tapAction(int xPercent, int yPercent, int count) {
+        return ACTION_TAP_PREFIX + clamp(xPercent, 1, 99) + ":" + clamp(yPercent, 1, 99)
+                + ":" + clamp(count, 1, 10);
+    }
+
+    static boolean isTapAction(String action) {
+        if (action == null || !action.startsWith(ACTION_TAP_PREFIX)) return false;
+        String[] parts = action.substring(ACTION_TAP_PREFIX.length()).split(":", -1);
+        if (parts.length != 3) return false;
+        try {
+            int x = Integer.parseInt(parts[0]);
+            int y = Integer.parseInt(parts[1]);
+            int count = Integer.parseInt(parts[2]);
+            return x >= 1 && x <= 99 && y >= 1 && y <= 99 && count >= 1 && count <= 10;
+        } catch (NumberFormatException ignored) {
+            return false;
+        }
+    }
+
+    static int tapXPercent(String action) { return tapValue(action, 0, 50); }
+    static int tapYPercent(String action) { return tapValue(action, 1, 50); }
+    static int tapCount(String action) { return tapValue(action, 2, 1); }
+
+    private static int tapValue(String action, int index, int fallback) {
+        if (!isTapAction(action)) return fallback;
+        return Integer.parseInt(action.substring(ACTION_TAP_PREFIX.length()).split(":")[index]);
     }
 
     private static long parseLong(String raw, long fallback) {

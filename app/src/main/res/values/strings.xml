@@ -44,6 +44,7 @@
     <string name="swipe_down">Swipe down</string>
     <string name="swipe_left">Swipe left</string>
     <string name="swipe_right">Swipe right</string>
+    <string name="tap_action">Tap screen</string>
     <string name="screenshot_partial">Area screenshot</string>
     <string name="passthrough">Pass through to app</string>
     <string name="none_info">Do not run an extra action for this gesture.</string>
@@ -52,6 +53,18 @@
     <string name="nav_info">Run the system navigation action.</string>
     <string name="page_info">Send a page key to the focused app.</string>
     <string name="swipe_info">Simulate a touch swipe for feeds and lists.</string>
+    <string name="tap_info">Configure a screen position and repeat count for ColorOS.</string>
+    <string name="tap_summary">%1$d%% across, %2$d%% down · %3$d taps</string>
+    <string name="tap_dialog_title">Configure screen taps</string>
+    <string name="tap_dialog_info">Set a position on the screen and how many taps to send.</string>
+    <string name="tap_x">Horizontal position</string>
+    <string name="tap_y">Vertical position</string>
+    <string name="tap_x_info">Position from the left edge.</string>
+    <string name="tap_y_info">Position from the top edge.</string>
+    <string name="tap_count">Tap count</string>
+    <string name="tap_count_info">Number of taps to send when this action runs.</string>
+    <string name="tap_percent">%1$d%%</string>
+    <string name="tap_count_value">%1$d taps</string>
     <string name="screenshot_info">Open the system area screenshot selector.</string>
     <string name="passthrough_info">Let the foreground app handle the pen button. Set its shortcut inside that app. When all three gestures pass through, pressing and releasing are sent immediately.</string>
     <string name="launch_info">Launch the selected installed app.</string>

@@ -39,6 +39,14 @@ final class ActionRunner {
         if (action == null || PenConfig.ACTION_NONE.equals(action)) return;
         Log.i(TAG, "FPL|action|" + action);
         try {
+            if (PenConfig.isTapAction(action)) {
+                if (RomProfile.detect() != RomProfile.Family.COLOROS) {
+                    Log.w(TAG, "FPL|action|ColorOS-only tap ignored on " + RomProfile.detect());
+                    return;
+                }
+                tapScreen(context, action);
+                return;
+            }
             if (action.startsWith(PenConfig.ACTION_LAUNCH_PREFIX)) {
                 launch(context, action.substring(PenConfig.ACTION_LAUNCH_PREFIX.length()));
                 return;
@@ -69,7 +77,8 @@ final class ActionRunner {
                     inject(context, KeyEvent.KEYCODE_PAGE_DOWN);
                     break;
                 case PenConfig.ACTION_SWIPE_UP:
-                    swipe(context, true);
+                    if (RomProfile.detect() == RomProfile.Family.COLOROS) swipeUpColorOS(context);
+                    else swipe(context, true);
                     break;
                 case PenConfig.ACTION_SWIPE_DOWN:
                     swipe(context, false);
@@ -80,6 +89,8 @@ final class ActionRunner {
                 case PenConfig.ACTION_SWIPE_RIGHT:
                     swipeHorizontally(context, false);
                     break;
+                case PenConfig.ACTION_TAP:
+                    throw new IllegalStateException("Screen tap action is not configured");
                 case PenConfig.ACTION_SCREENSHOT:
                     screenshot(context);
                     break;
@@ -218,6 +229,14 @@ final class ActionRunner {
         injectSwipe(context, x, from, x, to);
     }
 
+    /** A longer ColorOS drag crosses full-screen live cards with a single pen-key action. */
+    private static void swipeUpColorOS(Context context) {
+        DisplayMetrics metrics = Resources.getSystem().getDisplayMetrics();
+        float x = metrics.widthPixels * 0.5f;
+        injectSwipe(context, x, metrics.heightPixels * 0.92f, x, metrics.heightPixels * 0.08f,
+                320L, 16);
+    }
+
     private static void swipeHorizontally(Context context, boolean leftward) {
         DisplayMetrics metrics = Resources.getSystem().getDisplayMetrics();
         float y = metrics.heightPixels * 0.5f;
@@ -227,11 +246,14 @@ final class ActionRunner {
     }
 
     private static void injectSwipe(Context context, float x0, float y0, float x1, float y1) {
+        injectSwipe(context, x0, y0, x1, y1, 160L, 8);
+    }
+
+    private static void injectSwipe(Context context, float x0, float y0, float x1, float y1,
+                                    long durationMs, int steps) {
         InputManager input = (InputManager) context.getSystemService(Context.INPUT_SERVICE);
         if (input == null) return;
 
-        final long durationMs = 160L;
-        final int steps = 8;
         long now = SystemClock.uptimeMillis();
         long downTime = now - durationMs;
 
@@ -242,6 +264,25 @@ final class ActionRunner {
                     y0 + (y1 - y0) * step / steps));
         }
         send(input, motion(downTime, now, MotionEvent.ACTION_UP, x1, y1));
+    }
+
+    private static void tapScreen(Context context, String action) {
+        InputManager input = (InputManager) context.getSystemService(Context.INPUT_SERVICE);
+        if (input == null) return;
+        DisplayMetrics metrics = Resources.getSystem().getDisplayMetrics();
+        float x = metrics.widthPixels * PenConfig.tapXPercent(action) / 100f;
+        float y = metrics.heightPixels * PenConfig.tapYPercent(action) / 100f;
+        int count = PenConfig.tapCount(action);
+        final long pressMs = 40L;
+        final long intervalMs = 120L;
+        long now = SystemClock.uptimeMillis();
+        long durationMs = (count - 1L) * intervalMs + pressMs;
+        long firstDown = now - durationMs;
+        for (int index = 0; index < count; index++) {
+            long downTime = firstDown + index * intervalMs;
+            send(input, motion(downTime, downTime, MotionEvent.ACTION_DOWN, x, y));
+            send(input, motion(downTime, downTime + pressMs, MotionEvent.ACTION_UP, x, y));
+        }
     }
 
     private static MotionEvent motion(long downTime, long eventTime, int action, float x, float y) {
