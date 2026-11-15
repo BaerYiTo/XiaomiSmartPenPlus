@@ -211,28 +211,59 @@ if(index>0&&index<events.size()-1)eq(MotionEvent.ACTION_MOVE,event.getAction(),"
 }
 }
 static void tapTests(Context context,String family) {
-android.hardware.input.InputManager.sent.clear();android.os.Handler.now=30000;
-ActionRunner.run(context,PenConfig.tapAction(25,75,3),0);
+Handler.reset();Handler.now=30000;clearTapEvents();
+if(!"COLOROS".equals(family)){
+ActionRunner.run(context,PenConfig.tapAction(25,75,3),0);Handler.advance(0);
+eq(0,android.hardware.input.InputManager.sent.size(),"ColorOS tap action is ignored on other ROMs");eq(0,Handler.pendingCount(),"non-ColorOS tap schedules no events");return;
+}
+checkTapSequence(30000L,3,120L);
+checkTapSequence(40000L,3,250L);
+tapQueueTests(context);
+}
+static void clearTapEvents(){android.hardware.input.InputManager.sent.clear();android.hardware.input.InputManager.sentAt.clear();}
+static void checkTapSequence(long start,int count,long interval) {
+Handler.reset();Handler.now=start;clearTapEvents();
+Context context=new Context();ActionRunner.run(context,PenConfig.tapAction(25,75,count,(int)interval),0);Handler.advance(0);
 List<InputEvent> events=android.hardware.input.InputManager.sent;
-if(!"COLOROS".equals(family)){eq(0,events.size(),"ColorOS tap action is ignored on other ROMs");return;}
-eq(6,events.size(),"configured tap sends one DOWN/UP pair per repeat");
-for(int index=0;index<events.size();index++){
-MotionEvent event=(MotionEvent)events.get(index);int tap=index/2;
-eq(index%2==0?MotionEvent.ACTION_DOWN:MotionEvent.ACTION_UP,event.getAction(),"tap alternates DOWN and UP");
-eq(720f,event.getX(),"tap x uses configured display percentage");eq(1350f,event.getY(),"tap y uses configured display percentage");
-eq(29720L+tap*120L,event.getDownTime(),"each tap has its own down time");
-eq(29720L+tap*120L+(index%2==0?0:40),event.getEventTime(),"tap events use realistic press timing");
-eq(InputDevice.SOURCE_TOUCHSCREEN,event.getSource(),"tap uses touchscreen source");eq(1,event.recycleCount,"sender recycles each tap event once");
+for(int tap=0;tap<count;tap++){
+if(tap>0)Handler.advance(interval-40L);
+int downIndex=tap*2;eq(downIndex+1,events.size(),"tap DOWN is emitted at its scheduled interval");
+MotionEvent down=(MotionEvent)events.get(downIndex);
+eq(MotionEvent.ACTION_DOWN,down.getAction(),"tap starts with DOWN");
+eq(720f,down.getX(),"tap x uses configured display percentage");eq(1350f,down.getY(),"tap y uses configured display percentage");
+eq(start+tap*interval,down.getDownTime(),"tap down time is captured at dispatch");
+eq(down.getEventTime(),android.hardware.input.InputManager.sentAt.get(downIndex),"DOWN timestamp matches injection time");
+eq(InputDevice.SOURCE_TOUCHSCREEN,down.getSource(),"tap uses touchscreen source");eq(1,down.recycleCount,"sender recycles DOWN once");
+Handler.advance(40L);
+eq(downIndex+2,events.size(),"tap UP follows its press duration");
+MotionEvent up=(MotionEvent)events.get(downIndex+1);
+eq(MotionEvent.ACTION_UP,up.getAction(),"tap ends with UP");eq(down.getDownTime(),up.getDownTime(),"UP retains its tap DOWN time");
+eq(up.getEventTime()-down.getEventTime(),40L,"tap holds for the configured press duration");
+eq(up.getEventTime(),android.hardware.input.InputManager.sentAt.get(downIndex+1),"UP timestamp matches injection time");
+eq(true,up.getEventTime()>=down.getEventTime(),"tap timestamps are ordered");eq(1,up.recycleCount,"sender recycles UP once");
 }
-android.hardware.input.InputManager.sent.clear();
-ActionRunner.run(context,PenConfig.tapAction(25,75,3,250),0);
-events=android.hardware.input.InputManager.sent;
-eq(6,events.size(),"custom interval retains one DOWN/UP pair per repeat");
-for(int index=0;index<events.size();index++){
-MotionEvent event=(MotionEvent)events.get(index);int tap=index/2;
-eq(29460L+tap*250L,event.getDownTime(),"custom interval spaces each tap down time");
-eq(29460L+tap*250L+(index%2==0?0:40),event.getEventTime(),"custom interval preserves press duration");
+eq(0,Handler.pendingCount(),"completed tap sequence has no pending callbacks");
 }
+static void tapQueueTests(Context context) {
+Handler.reset();Handler.now=50000;clearTapEvents();
+ActionRunner.run(context,PenConfig.tapAction(50,50,2,60),0);
+ActionRunner.run(context,PenConfig.tapAction(60,40,1,60),0);
+Handler.advance(0);
+List<InputEvent> events=android.hardware.input.InputManager.sent;
+eq(1,events.size(),"queued tap sequence waits for the active sequence");
+Handler.advance(40);eq(2,events.size(),"first tap releases before the next pair");
+Handler.advance(20);eq(3,events.size(),"next repeat starts after its configured interval");
+Handler.advance(40);eq(4,events.size(),"active sequence completes before queued action starts");
+Handler.advance(1);eq(5,events.size(),"queued action starts after prior sequence completes");
+Handler.advance(40);eq(6,events.size(),"queued action completes its own DOWN/UP pair");
+long previousTime=0L;
+for(int index=0;index<events.size();index++){
+MotionEvent event=(MotionEvent)events.get(index);
+eq(index%2==0?MotionEvent.ACTION_DOWN:MotionEvent.ACTION_UP,event.getAction(),"queued sequences preserve DOWN/UP order");
+eq(event.getEventTime(),android.hardware.input.InputManager.sentAt.get(index),"queued event timestamp matches injection time");
+eq(true,event.getEventTime()>=previousTime,"queued event timestamps are monotonic");previousTime=event.getEventTime();
+}
+eq(0,Handler.pendingCount(),"queued tap sequences drain completely");
 }
 static final class NativeProbe {final List<Object[]> calls=new ArrayList<>();Object result=0;boolean throwFailure;
 public Object injectInputEvent(InputEvent event,boolean intoUid,int uid,int mode,int timeout,int flags){if(throwFailure)throw new IllegalStateException("native failure");calls.add(new Object[]{event,intoUid,uid,mode,timeout,flags});return result;}}
@@ -274,7 +305,7 @@ System.out.println("PASS "+checks+" production sender assertions (native endpoin
 }
 }''',
 })
-sender_stubs['android/hardware/input/InputManager.java']=sender_stubs['android/hardware/input/InputManager.java'].replace('public class InputManager {','public class InputManager {public static final java.util.List<android.view.InputEvent> sent=new java.util.ArrayList<>();public boolean injectInputEvent(android.view.InputEvent event,int mode){sent.add(event);return true;}')
+sender_stubs['android/hardware/input/InputManager.java']=sender_stubs['android/hardware/input/InputManager.java'].replace('public class InputManager {','public class InputManager {public static final java.util.List<android.view.InputEvent> sent=new java.util.ArrayList<>();public static final java.util.List<Long> sentAt=new java.util.ArrayList<>();public boolean injectInputEvent(android.view.InputEvent event,int mode){sent.add(event);sentAt.add(android.os.SystemClock.uptimeMillis());return true;}')
 sender_stubs['android/content/Context.java']=sender_stubs['android/content/Context.java'].replace('public static final String INPUT_SERVICE="input";', 'public static final String INPUT_SERVICE="input",AUDIO_SERVICE="audio"; public android.content.pm.PackageManager getPackageManager(){return new android.content.pm.PackageManager();}public void startActivity(Intent intent){}')
 for name,content in sender_stubs.items():
     p=sender_sources/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(content,encoding='utf-8')

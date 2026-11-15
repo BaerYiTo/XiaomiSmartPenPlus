@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.2.2
+
+- Schedule ColorOS screen taps using current event times and serialize repeated tap sequences.
+- Test real tap spacing, FIFO ordering, and non-ColorOS isolation.
+
 ## 2.2.1
 
 - Add a ColorOS-only home entry for per-app, per-button, and per-gesture tap settings.

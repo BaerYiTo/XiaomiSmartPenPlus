@@ -15,6 +15,8 @@ import android.view.InputEvent;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 
+import java.util.ArrayDeque;
+
 /**
  * Every action the module can perform. Each one reports failure in the log instead of swallowing
  * it, so a broken action is visible on the device rather than silently doing nothing.
@@ -26,6 +28,7 @@ final class ActionRunner {
     private static volatile ClassLoader systemLoader;
     private static volatile Object nativeInput;
     private static final Handler RESET_HANDLER = new Handler(Looper.getMainLooper());
+    private static final ArrayDeque<TapSequence> TAP_QUEUE = new ArrayDeque<>();
     private static final int POLICY_FLAG_FILTERED = 0x04000000;
     private static final int POLICY_FLAG_PASS_TO_USER = 0x40000000;
 
@@ -272,16 +275,81 @@ final class ActionRunner {
         DisplayMetrics metrics = Resources.getSystem().getDisplayMetrics();
         float x = metrics.widthPixels * PenConfig.tapXPercent(action) / 100f;
         float y = metrics.heightPixels * PenConfig.tapYPercent(action) / 100f;
-        int count = PenConfig.tapCount(action);
-        final long pressMs = 40L;
-        final long intervalMs = PenConfig.tapIntervalMs(action);
-        long now = SystemClock.uptimeMillis();
-        long durationMs = (count - 1L) * intervalMs + pressMs;
-        long firstDown = now - durationMs;
-        for (int index = 0; index < count; index++) {
-            long downTime = firstDown + index * intervalMs;
-            send(input, motion(downTime, downTime, MotionEvent.ACTION_DOWN, x, y));
-            send(input, motion(downTime, downTime + pressMs, MotionEvent.ACTION_UP, x, y));
+        TapSequence sequence = new TapSequence(input, x, y,
+                PenConfig.tapCount(action), PenConfig.tapIntervalMs(action));
+        // Keep all queue mutations on the same Looper used for injection and sequence timing.
+        RESET_HANDLER.post(() -> {
+            TAP_QUEUE.addLast(sequence);
+            if (TAP_QUEUE.peekFirst() == sequence) sequence.sendDown();
+        });
+    }
+
+    private static final class TapSequence {
+        private static final long PRESS_MS = 40L;
+
+        private final InputManager input;
+        private final float x;
+        private final float y;
+        private final int count;
+        private final long intervalMs;
+        private int completed;
+        private long downTime;
+
+        TapSequence(InputManager input, float x, float y, int count, long intervalMs) {
+            this.input = input;
+            this.x = x;
+            this.y = y;
+            this.count = count;
+            this.intervalMs = intervalMs;
+        }
+
+        void sendDown() {
+            try {
+                downTime = SystemClock.uptimeMillis();
+                send(input, motion(downTime, downTime, MotionEvent.ACTION_DOWN, x, y));
+                RESET_HANDLER.postDelayed(this::sendUp, PRESS_MS);
+            } catch (Throwable failure) {
+                fail(failure);
+            }
+        }
+
+        private void sendUp() {
+            long previousDownTime = downTime;
+            try {
+                long upTime = SystemClock.uptimeMillis();
+                send(input, motion(previousDownTime, upTime, MotionEvent.ACTION_UP, x, y));
+                downTime = 0L;
+                completed++;
+                if (completed == count) {
+                    finish();
+                } else {
+                    RESET_HANDLER.postDelayed(this::sendDown,
+                                Math.max(1L, intervalMs - (upTime - previousDownTime)));
+                }
+            } catch (Throwable failure) {
+                // If UP was rejected, make one best-effort release before advancing the queue.
+                if (previousDownTime != 0L) {
+                    try {
+                        long retryTime = SystemClock.uptimeMillis();
+                        send(input, motion(previousDownTime, retryTime, MotionEvent.ACTION_UP, x, y));
+                    } catch (Throwable releaseFailure) {
+                        failure.addSuppressed(releaseFailure);
+                    }
+                }
+                downTime = 0L;
+                fail(failure);
+            }
+        }
+
+        private void fail(Throwable failure) {
+            Log.w(TAG, "FPL|action|tap FAILED after " + completed + " taps", failure);
+            finish();
+        }
+
+        private void finish() {
+            TAP_QUEUE.remove(this);
+            TapSequence next = TAP_QUEUE.peekFirst();
+            if (next != null) RESET_HANDLER.postDelayed(next::sendDown, 1L);
         }
     }
 

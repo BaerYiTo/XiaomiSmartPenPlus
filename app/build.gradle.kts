@@ -20,8 +20,8 @@ android {
         applicationId = "com.inkdye.xiaomipen"
         minSdk = 34
         targetSdk = 37
-        versionCode = 24
-        versionName = "2.2.1"
+        versionCode = 25
+        versionName = "2.2.2"
     }
 
     compileOptions {
