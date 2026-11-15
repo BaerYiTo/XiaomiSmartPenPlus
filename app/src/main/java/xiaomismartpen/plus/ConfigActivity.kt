@@ -1,6 +1,9 @@
 package xiaomismartpen.plus
 
+import android.content.Context
 import android.content.Intent
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Bundle
@@ -8,6 +11,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
@@ -50,6 +54,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -136,6 +141,10 @@ private fun PenApp() {
     var confirmation by remember { mutableStateOf<Confirmation?>(null) }
     var tapEditor by remember { mutableStateOf<TapEditorTarget?>(null) }
     var tapSettingsPage by rememberSaveable { mutableStateOf(false) }
+    var diagnosticsPage by rememberSaveable { mutableStateOf(false) }
+    var diagnosticReport by remember { mutableStateOf<String?>(null) }
+    var diagnosticError by remember { mutableStateOf<String?>(null) }
+    var diagnosticLoading by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf<Pair<String, String>?>(null) }
     var busy by remember { mutableStateOf(false) }
     val catalog = remember(apps, extraApps) { extraApps + apps.associateBy { it.pkg } }
@@ -247,12 +256,26 @@ private fun PenApp() {
             finally { busy = false }
         }
     }
+    fun refreshDiagnostics() {
+        if (busy) return
+        busy = true
+        diagnosticLoading = true
+        diagnosticError = null
+        diagnosticReport = null
+        scope.launch {
+            try { diagnosticReport = withContext(Dispatchers.IO) { RootTools.diagnostics() } }
+            catch (failure: CancellationException) { throw failure }
+            catch (failure: Exception) { diagnosticError = failure.message ?: failure.toString() }
+            finally { diagnosticLoading = false; busy = false }
+        }
+    }
     fun openUrl(url: String) {
         runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
             .onFailure { result = s(R.string.failed) to s(R.string.browser_error) }
     }
     fun goBack() {
         when {
+            diagnosticsPage -> diagnosticsPage = false
             picker != null -> picker = null
             tapEditor != null -> tapEditor = null
             tapSettingsPage -> tapSettingsPage = false
@@ -261,8 +284,16 @@ private fun PenApp() {
             tab != 0 -> tab = 0
         }
     }
-    BackHandler(picker != null || tapEditor != null || tapSettingsPage || devicePage
+    BackHandler(diagnosticsPage || picker != null || tapEditor != null || tapSettingsPage || devicePage
             || (tab == 1 && profilePkg != null) || tab != 0) { goBack() }
+    LaunchedEffect(rom) {
+        if (rom != RomProfile.Family.COLOROS) return@LaunchedEffect
+        val prefs = context.getSharedPreferences("first_run", Context.MODE_PRIVATE)
+        if (!prefs.getBoolean("bridge_auto_install_attempted", false)) {
+            prefs.edit().putBoolean("bridge_auto_install_attempted", true).commit()
+            runTask({ RootTools.installIfMissing(context) }, s(R.string.auto_bridge_setup))
+        }
+    }
     val cfg = config
     // 恢复的导航状态不能在其他 ROM 重新打开 ColorOS 专属页面。
     val systemPage = devicePage && rom == RomProfile.Family.COLOROS
@@ -278,6 +309,7 @@ private fun PenApp() {
     val current = if (selected == null) cfg else cfg?.appConfig(selected)
     val tapTarget = tapEditor
     val pageKey = when {
+        diagnosticsPage -> "diagnostics"
         systemPage -> "device"
         tapSettingsVisible && tapTarget != null -> "tapEditor:" + (tapTarget.profilePkg ?: "default") + ":" + tapTarget.button + ":" + tapTarget.slot
         tapSettingsVisible -> "tapSettings"
@@ -286,9 +318,18 @@ private fun PenApp() {
     }
 
     Box(Modifier.fillMaxSize()) {
-            PenPage(tab, systemPage, selected != null, tapSettingsVisible, tapTarget != null, pageKey,
-                onTab = { tab = it; devicePage = false; tapSettingsPage = false; tapEditor = null }, onBack = ::goBack) {
+            PenPage(tab, systemPage, selected != null, tapSettingsVisible, tapTarget != null, diagnosticsPage, pageKey,
+                onTab = { tab = it; devicePage = false; tapSettingsPage = false; tapEditor = null; diagnosticsPage = false }, onBack = ::goBack) {
                 if (cfg == null) item { InfoCard(saveStatus, s(R.string.loading_info)) }
+                else if (diagnosticsPage) {
+                    item { DiagnosticsPage(diagnosticReport, diagnosticError, diagnosticLoading,
+                        onRefresh = ::refreshDiagnostics,
+                        onCopy = { report ->
+                            val clipboard = context.getSystemService(ClipboardManager::class.java)
+                            clipboard.setPrimaryClip(ClipData.newPlainText(s(R.string.diagnostics), report))
+                            Toast.makeText(context, s(R.string.diagnostics_copied), Toast.LENGTH_SHORT).show()
+                        }) }
+                }
                 else if (systemPage) {
                     item { ActionButton(s(R.string.back_default), onClick = { devicePage = false }) }
                     item { InfoCard(s(R.string.device_settings), s(if (rom == RomProfile.Family.COLOROS) R.string.integration_info else R.string.native_system_info), saveStatus) }
@@ -430,8 +471,8 @@ private fun PenApp() {
                                     .joinToString("\n\n") { file -> file + "\n\n" + context.assets.open("third_party/$file").bufferedReader().use { it.readText() } }
                                 }, s(R.string.licenses))
                             })
-                            Preference(s(R.string.diagnostics), arrow = true, enabled = !busy,
-                                onClick = { runTask(RootTools::diagnostics, s(R.string.diagnostics)) })
+                            Preference(s(R.string.diagnostics), s(R.string.diagnostics_info), arrow = true, enabled = !busy,
+                                onClick = { diagnosticsPage = true; refreshDiagnostics() })
                         } }
                     }
                 }
@@ -476,7 +517,7 @@ private fun PenApp() {
 }
 
 @Composable
-private fun PenPage(tab: Int, device: Boolean, appProfile: Boolean, tapSettings: Boolean, tapEditing: Boolean,
+private fun PenPage(tab: Int, device: Boolean, appProfile: Boolean, tapSettings: Boolean, tapEditing: Boolean, diagnostics: Boolean,
                     pageKey: String, onTab: (Int) -> Unit, onBack: () -> Unit,
                     content: LazyListScope.() -> Unit) {
     val pages = rememberSaveableStateHolder()
@@ -492,7 +533,7 @@ private fun PenPage(tab: Int, device: Boolean, appProfile: Boolean, tapSettings:
             }
             Box(Modifier.weight(1f).fillMaxHeight()) {
                 pages.SaveableStateProvider(pageKey) {
-                    PageContent(device, appProfile, tapSettings, tapEditing, onBack, content)
+                    PageContent(device, appProfile, tapSettings, tapEditing, diagnostics, onBack, content)
                 }
             }
         }
@@ -500,7 +541,7 @@ private fun PenPage(tab: Int, device: Boolean, appProfile: Boolean, tapSettings:
 }
 
 @Composable
-private fun PageContent(device: Boolean, appProfile: Boolean, tapSettings: Boolean, tapEditing: Boolean,
+private fun PageContent(device: Boolean, appProfile: Boolean, tapSettings: Boolean, tapEditing: Boolean, diagnostics: Boolean,
                         onBack: () -> Unit, content: LazyListScope.() -> Unit) {
     val list = rememberLazyListState()
     val scrollBehavior = MiuixScrollBehavior(state = rememberTopAppBarState(),
@@ -513,12 +554,14 @@ private fun PageContent(device: Boolean, appProfile: Boolean, tapSettings: Boole
     Scaffold(popupHost = {}, topBar = {
         TopAppBar(
             title = stringResource(when {
+                diagnostics -> R.string.diagnostics
                 device -> R.string.device_settings
                 tapEditing -> R.string.tap_editor_title
                 tapSettings -> R.string.tap_settings_title
                 else -> R.string.app_name
             }),
             subtitle = stringResource(when {
+                diagnostics -> R.string.diagnostics_subtitle
                 device -> R.string.device_subtitle
                 tapSettings -> R.string.tap_settings_subtitle
                 appProfile -> R.string.profile_subtitle
@@ -526,7 +569,7 @@ private fun PageContent(device: Boolean, appProfile: Boolean, tapSettings: Boole
             }),
             scrollBehavior = scrollBehavior,
             navigationIcon = {
-                if (device || appProfile || tapSettings) IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
+                if (diagnostics || device || appProfile || tapSettings) IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
                     Icon(MiuixIcons.Back, stringResource(R.string.back))
                 }
             },
@@ -703,6 +746,78 @@ private fun TimingRow(title: String, value: Int, range: IntRange, hint: String, 
         SecondaryText(stringResource(R.string.ms, range.first))
         SecondaryText(stringResource(R.string.ms, range.last))
     }
+}
+
+@Composable
+private fun DiagnosticsPage(report: String?, error: String?, loading: Boolean,
+                            onRefresh: () -> Unit, onCopy: (String) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        if (loading) InfoCard(stringResource(R.string.diagnostics_loading), stringResource(R.string.diagnostics_info))
+        else if (error != null) InfoCard(stringResource(R.string.diagnostics_failed), error)
+        report?.let { text ->
+            val parts = text.split("\n---logs---\n", limit = 2)
+            val values = parts.firstOrNull().orEmpty().lineSequence().mapNotNull { line ->
+                val separator = line.indexOf('=')
+                if (separator <= 0) null else line.substring(0, separator) to line.substring(separator + 1)
+            }.toMap()
+            PenCard {
+                Column(Modifier.padding(18.dp)) {
+                    SectionTitle(stringResource(R.string.diagnostics_status))
+                    Spacer(Modifier.height(8.dp))
+                    DiagnosticValue(R.string.diag_root, values["root_uid"]?.let {
+                        if (it == "0") stringResource(R.string.diag_root_available) else it
+                    } ?: stringResource(R.string.unknown))
+                    DiagnosticValue(R.string.diag_bridge_binary, presenceLabel(values["bridge_binary"]))
+                    DiagnosticValue(R.string.diag_service_script, presenceLabel(values["service_script"]))
+                    DiagnosticValue(R.string.diag_bridge_process, processLabel(values["bridge_pid"]))
+                    DiagnosticValue(R.string.diag_button_process, processLabel(values["button_pid"]))
+                    DiagnosticValue(R.string.diag_hardware_state, values["hardware_state"] ?: stringResource(R.string.unknown))
+                    DiagnosticValue(R.string.diag_module_heartbeat, heartbeatLabel(values["module_heartbeat"]))
+                    DiagnosticValue(R.string.diag_ipe_heartbeat, heartbeatLabel(values["ipe_heartbeat"]))
+                }
+            }
+            val logs = parts.getOrNull(1).orEmpty().trim()
+            PenCard {
+                Column(Modifier.padding(18.dp)) {
+                    SectionTitle(stringResource(R.string.diag_recent_logs))
+                    Spacer(Modifier.height(10.dp))
+                    Text(text = logs.ifBlank { stringResource(R.string.diag_no_logs) }, fontSize = 12.sp,
+                        lineHeight = 17.sp, fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp).verticalScroll(rememberScrollState()))
+                }
+            }
+        }
+        ActionButton(stringResource(R.string.refresh_diagnostics), onClick = onRefresh)
+        if (report != null) ActionButton(stringResource(R.string.copy_diagnostics), onClick = { onCopy(report) })
+    }
+}
+
+@Composable
+private fun DiagnosticValue(title: Int, value: String) {
+    Preference(stringResource(title), summary = value)
+}
+
+@Composable
+private fun presenceLabel(value: String?): String = when (value) {
+    "yes" -> stringResource(R.string.diag_present)
+    "no" -> stringResource(R.string.diag_missing)
+    else -> stringResource(R.string.unknown)
+}
+
+@Composable
+private fun processLabel(value: String?): String = when {
+    value.isNullOrBlank() -> stringResource(R.string.unknown)
+    value == "stopped" -> stringResource(R.string.diag_stopped)
+    else -> value
+}
+
+@Composable
+private fun heartbeatLabel(value: String?): String {
+    val timestamp = value?.toLongOrNull() ?: return stringResource(R.string.unknown)
+    val ageMs = SystemClock.elapsedRealtime() - timestamp
+    return if (ageMs in 0..45_000) {
+        stringResource(R.string.diag_heartbeat_active, (ageMs / 1000).toInt())
+    } else stringResource(R.string.diag_heartbeat_stale)
 }
 
 @Composable
